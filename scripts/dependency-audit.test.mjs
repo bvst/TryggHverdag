@@ -205,6 +205,15 @@
  *     key but `packages:` and `catalog:`, each once. Adding a shape is a
  *     change to this test, in code-owned scripts/;
  *   - the root .npmrc is exactly `engine-strict=true` and a line feed;
+ *   - BUG-69's two settings, each with a named fixture: `scriptShell` in
+ *     pnpm-workspace.yaml is refused by the line grammar and
+ *     `WORKSPACE_SETTINGS`, and `script-shell` in the root .npmrc by
+ *     `RC_SETTINGS` (and by the byte pin above);
+ *   - BUG-69's package files: no .npmrc, pnpm-workspace.yaml or .pnpmfile.cjs
+ *     anywhere in the repository, read by walking the tree with no git
+ *     subprocess, `node_modules` and `.git` skipped, but the root's two and
+ *     spikes/background-safety/app/pnpm-workspace.yaml, which is outside the
+ *     root workspace (`PNPM_SETTINGS_ALLOWED`);
  *   - D-093's premise, read from pnpm-lock.yaml (lockfile v9): the packages
  *     that depend on `node-forge` are exactly `@expo/cli` and
  *     `@expo/code-signing-certificates`, the second's only dependent is
@@ -281,8 +290,11 @@
  *     route is closed by the owner's review: D-144 makes all three
  *     code-owned in #105, the pnpmfile before it exists. A check that runs
  *     before pnpm in CI is queued as BUG-69's follow-up. A package's own
- *     .npmrc with `script-shell` changed the shell only for a run started in
- *     that package's folder, not from the root; none exists;
+ *     .npmrc or pnpm-workspace.yaml changes the shell for a run started in
+ *     that package's folder, and turbo runs every package script there: an
+ *     apps/server/.npmrc made its `typecheck` pass over a type error
+ *     (2026-10-26). That route is refused here (see the pinned list above),
+ *     and in CI only when this file runs, as for the root's;
  *   - an audit command or a setting that a workflow builds while it runs:
  *     shell quoting or variables (`pnpm "au"dit`), a GitHub expression
  *     (`${{ … }}`) or a repository variable. A workflow is read as GitHub
@@ -304,8 +316,9 @@
  *     differently beyond the differences found (see `yamlLibrary`). For
  *     pnpm-workspace.yaml the line grammar depends on neither. A workflow is
  *     read by `yaml` alone: GitHub's reader was not compared;
- *   - an .npmrc in a workspace package, which nothing here reads: a
- *     `registry` line in apps/mobile/.npmrc did not redirect the audit (tried
+ *   - what an .npmrc in a workspace package would set: none may exist
+ *     (BUG-69, above), so none is read. A `registry` line in
+ *     apps/mobile/.npmrc did not redirect the audit (tried
  *     2026-10-26). In pnpm-workspace.yaml a `registry` key did not either,
  *     but `registries` did: BUG-67's route, now refused here by
  *     `WORKSPACE_SETTINGS` (in CI, only when this file runs: BUG-69 above),
@@ -401,8 +414,17 @@
  * If a pnpmfile or a config dependency is ever needed, this file failing is the
  * prompt to look at what it does to the audit.
  */
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { createRequire } from 'node:module';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, test } from 'vitest';
@@ -960,6 +982,49 @@ function rcUnlisted(text) {
       (name) =>
         `.npmrc sets ${JSON.stringify(name)}, which is not among the settings it may hold (${[...RC_SETTINGS].join(', ')}): adding one is a change to this test, and scripts/ is code-owned, so the owner approves it`,
     );
+}
+
+/**
+ * BUG-69: the names of the files pnpm takes a folder's settings and hooks
+ * from. In the folder a script runs in, `script-shell` in an .npmrc or
+ * `scriptShell` in a pnpm-workspace.yaml names the shell pnpm runs it with;
+ * a .pnpmfile.cjs's `updateConfig` can set either.
+ */
+const PNPM_SETTINGS_FILES = ['.npmrc', 'pnpm-workspace.yaml', '.pnpmfile.cjs'];
+
+/**
+ * BUG-69: the only files of those names the repository may hold. The root's
+ * two are pinned by the tests of them here, and code-owned (D-144). The
+ * spike's is outside the root workspace (`apps/*`, `packages/*`), so pnpm and
+ * turbo at the root never run a script there.
+ */
+const PNPM_SETTINGS_ALLOWED = [
+  '.npmrc',
+  'pnpm-workspace.yaml',
+  'spikes/background-safety/app/pnpm-workspace.yaml',
+];
+
+/**
+ * BUG-69: every file under the folder `top` named as one of
+ * `PNPM_SETTINGS_FILES`, as a path from `top` with `/` between folders,
+ * sorted. Folders named `node_modules` or `.git` are skipped, and a symbolic
+ * link to a folder is not followed. The tree is read as it is, with no git
+ * subprocess, so an untracked file is found too.
+ */
+function pnpmSettingsFiles(top) {
+  const found = [];
+  const walk = (dir) => {
+    for (const entry of readdirSync(path.join(top, dir), { withFileTypes: true })) {
+      const at = dir === '' ? entry.name : `${dir}/${entry.name}`;
+      if (entry.isDirectory()) {
+        if (entry.name !== 'node_modules' && entry.name !== '.git') walk(at);
+      } else if (PNPM_SETTINGS_FILES.includes(entry.name)) {
+        found.push(at);
+      }
+    }
+  };
+  walk('');
+  return found.toSorted();
 }
 
 /**
@@ -3266,6 +3331,88 @@ packages:
       readRc(),
       'the root .npmrc is not exactly "engine-strict=true\\n": pnpm reads its settings for the install and the audit. Changing it is a change to this test, and scripts/ is code-owned, so the owner approves it',
     ).toBe('engine-strict=true\n');
+  });
+
+  test('BUG-69: a script shell set in pnpm-workspace.yaml or the root .npmrc is refused, by the line grammar and WORKSPACE_SETTINGS, and by RC_SETTINGS', () => {
+    // These checks protect only while they run. In CI they run through
+    // `pnpm run test:unit`, and either line below makes pnpm run every
+    // script with /bin/true, this file's run included, so the check goes
+    // green having run nothing (pnpm 10.33.0, 2026-10-26). There the
+    // code-owner lines of D-144 are what hold. The byte pin above refuses the
+    // .npmrc line too, and needs no fixture: it compares the file with one
+    // exact string, and failed on this line in a scratch copy (2026-10-26).
+    const workspace =
+      'packages:\n  - apps/*\n  - packages/*\ncatalog:\n  zod: ^4.6.6\nscriptShell: /bin/true\n';
+    const rc = 'engine-strict=true\nscript-shell=/bin/true\n';
+
+    expect(
+      {
+        text: [ROUTE.test(workspace), ROUTE.test(rc)],
+        bug65: [...workspaceRoutes(workspace), ...rcRoutes(rc)],
+      },
+      "the fixtures pass BUG-11's text check and BUG-65's decoded read: only the grammar and the allowlists refuse them",
+    ).toEqual({ text: [false, false], bug65: [] });
+    expect(workspaceLines(workspace)).toEqual([
+      'pnpm-workspace.yaml line 6, "scriptShell: /bin/true", is not a line this file may hold: adding a line shape is a change to this test, and scripts/ is code-owned, so the owner approves it',
+    ]);
+    expect(workspaceUnlisted(workspace)).toEqual([
+      'pnpm-workspace.yaml sets "scriptShell", which is not among the settings it may hold (packages, catalog): adding one is a change to this test, and scripts/ is code-owned, so the owner approves it',
+    ]);
+    expect(rcUnlisted(rc)).toEqual([
+      '.npmrc sets "script-shell", which is not among the settings it may hold (engine-strict): adding one is a change to this test, and scripts/ is code-owned, so the owner approves it',
+    ]);
+  });
+
+  test("BUG-69: no .npmrc, pnpm-workspace.yaml or .pnpmfile.cjs is in the repository but the root's two and the spike's workspace file, so no package's scripts run with a shell a pull request chose", () => {
+    // turbo runs each package's script from that package's folder, and pnpm
+    // reads the .npmrc and pnpm-workspace.yaml there. With a type error in
+    // apps/server, `pnpm exec turbo run typecheck
+    // --filter=@trygghverdag/server --force` exits 2; with an apps/server/.npmrc
+    // holding `script-shell=/bin/true` it exits 0, "4 successful" (pnpm
+    // 10.33.0, 2026-10-26; privacy-security-reviewer's S1 on #105). A
+    // package's pnpm-workspace.yaml with `scriptShell` did the same, by the
+    // reviewer's report. A package's .pnpmfile.cjs alone did not, and is
+    // refused all the same.
+    //
+    // The files this refuses cannot switch it off. It runs in the root
+    // Vitest run, which `pnpm run test:unit` starts from the root: a
+    // package's own file does not reach a run started there, and the root
+    // .npmrc, pnpm-workspace.yaml and Vitest configuration it does read are
+    // code-owned (D-082, D-144).
+    const found = pnpmSettingsFiles(root);
+
+    expect(found, 'the walk did not find the root .npmrc, so it read nothing').toContain('.npmrc');
+    expect(
+      found.filter((file) => !PNPM_SETTINGS_ALLOWED.includes(file)),
+      'a file that sets pnpm settings for the folder it is in: a script run there, as turbo runs every package script, can be given a shell that runs nothing',
+    ).toEqual([]);
+  });
+
+  test('BUG-69: the walk finds each of those files in a package folder and deeper, skips node_modules and .git, and passes a tree with none', () => {
+    const top = mkdtempSync(path.join(tmpdir(), 'bug-69-'));
+    const put = (file) => {
+      mkdirSync(path.dirname(path.join(top, file)), { recursive: true });
+      writeFileSync(path.join(top, file), 'synthetic\n');
+    };
+    try {
+      put('apps/server/package.json');
+      put('apps/server/src/index.ts');
+      expect(pnpmSettingsFiles(top), 'a tree with none').toEqual([]);
+
+      put('apps/server/.npmrc');
+      put('packages/contracts/pnpm-workspace.yaml');
+      put('packages/contracts/src/deep/.pnpmfile.cjs');
+      put('apps/server/node_modules/some-package/.npmrc');
+      put('.git/hooks/.npmrc');
+      put('apps/server/.npmrc.bak');
+      expect(pnpmSettingsFiles(top)).toEqual([
+        'apps/server/.npmrc',
+        'packages/contracts/pnpm-workspace.yaml',
+        'packages/contracts/src/deep/.pnpmfile.cjs',
+      ]);
+    } finally {
+      rmSync(top, { recursive: true, force: true });
+    }
   });
 
   test("BUG-11: D-093's premise holds in the lockfile: node-forge comes only through Expo's command-line tool, at a version the advisory covers", () => {
