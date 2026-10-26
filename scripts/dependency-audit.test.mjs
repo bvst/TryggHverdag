@@ -105,6 +105,22 @@
  * or a certificate setting was not tried, and is refused by the list either
  * way.
  *
+ * BUG-67 is the same in pnpm-workspace.yaml, found by #105's
+ * privacy-security-reviewer. pnpm copies the file's top-level keys into its
+ * settings, and the audit asks `registries.default`. A `registry` key there
+ * had no effect, but with `registries:` and `default:` pointing at the same
+ * server, `pnpm audit --audit-level high` exited 0, "No known
+ * vulnerabilities found" (2026-10-26); the unchanged file exits 1. The
+ * reviewer also reported a `lockfileDir` pointing at an empty lockfile making
+ * the audit pass; it was not shown to get through
+ * `pnpm install --frozen-lockfile`. So the file's top-level keys may be only
+ * those in `WORKSPACE_SETTINGS`, today `packages` and `catalog`, named as
+ * pnpm's parser names them. That also refuses an `overrides:` key here,
+ * BUG-25's route through this file; BUG-25's other parts are not checked
+ * here. `httpsProxy`, `strictSsl` and `ca` were not tried, and are refused
+ * by the list either way. D-144, a code owner for the file, still follows
+ * #105.
+ *
  * An ignore list is a quiet way to stop a gate from seeing anything, so these
  * tests read files instead of running the audit: a `pnpm audit` run reads the
  * registry's advisory data, which changes whenever an advisory is published, and
@@ -148,6 +164,11 @@
  *     a `[section]`'s and the names inside it included, is in `RC_SETTINGS`
  *     (today only `engine-strict`). Adding a setting is a change to this test,
  *     in code-owned scripts/;
+ *   - BUG-67's allowlist: every top-level key of pnpm-workspace.yaml, named
+ *     as js-yaml names it (an alias followed, a sequence's items joined, a
+ *     `<<` kept as a key), is in `WORKSPACE_SETTINGS` (today `packages` and
+ *     `catalog`), and the file's top level is a mapping. Adding a setting is
+ *     a change to this test, in code-owned scripts/;
  *   - D-093's premise, read from pnpm-lock.yaml (lockfile v9): the packages
  *     that depend on `node-forge` are exactly `@expo/cli` and
  *     `@expo/code-signing-certificates`, the second's only dependent is
@@ -223,11 +244,12 @@
  *     bundled into pnpm and cannot be loaded; the two differences found, a
  *     `<<` merge and an unknown tag, are read where written or refused (see
  *     `yamlLibrary`);
- *   - a `registry` key in pnpm-workspace.yaml: not honoured by pnpm 10.33.0
- *     (tried 2026-10-26: the audit still reported the real advisories), and
- *     D-144 gives that file a code owner. The same was true of a `registry`
- *     line in apps/mobile/.npmrc. The workspace file is read here for
- *     BUG-65's words only, and an .npmrc in a workspace package not at all;
+ *   - an .npmrc in a workspace package, which nothing here reads: a
+ *     `registry` line in apps/mobile/.npmrc did not redirect the audit (tried
+ *     2026-10-26). In pnpm-workspace.yaml a `registry` key did not either,
+ *     but `registries` did: BUG-67's route, now refused by
+ *     `WORKSPACE_SETTINGS`, as is `lockfileDir`, reported by #105's
+ *     privacy-security-reviewer;
  *   - pnpm settings outside the repository (a runner's own user or global
  *     config);
  *   - the spike's own lockfile, spikes/background-safety/app/pnpm-lock.yaml,
@@ -565,6 +587,7 @@ function decodedYaml(file, text) {
   );
   const scalars = [];
   const keys = [];
+  let topLevel = [];
   if (doc.errors.length === 0) {
     // Block bodies: a visitor that returns a number moves the walk to that index.
     visit(doc, {
@@ -575,8 +598,32 @@ function decodedYaml(file, text) {
         keys.push(...keyTexts(pair.key, doc));
       },
     });
+    topLevel = topLevelKeys(doc);
   }
-  return { unread, scalars, keys };
+  return { unread, scalars, keys, topLevel };
+}
+
+/**
+ * BUG-67: the top-level keys of a YAML document as js-yaml, pnpm's parser,
+ * names them (read with pnpm 10.33.0's bundled loader, 2026-10-26): a
+ * scalar's text, an alias's target, a sequence's items joined by commas, a
+ * mapping as `[object Object]`, an empty key as `null`. A `<<` stays a key of
+ * its own here, where js-yaml merges what it names into the top level. Null
+ * when the top level is not a mapping, which pnpm refuses.
+ */
+function topLevelKeys(doc) {
+  const { isAlias, isMap, isScalar, isSeq } = yamlLibrary();
+  const name = (node, seen = new Set()) => {
+    if (node === null || node === undefined || seen.has(node)) return 'null';
+    seen.add(node);
+    if (isAlias(node)) return name(node.resolve(doc), seen);
+    if (isScalar(node)) return String(node.value);
+    if (isSeq(node)) return node.items.map((item) => name(item, seen)).join(',');
+    if (isMap(node)) return '[object Object]';
+    return 'null';
+  };
+  if (doc.contents === null) return [];
+  return isMap(doc.contents) ? doc.contents.items.map((pair) => name(pair.key)) : null;
 }
 
 /** A decoded text that names an audit or hook setting, as a finding. */
@@ -620,13 +667,35 @@ function workspaceRoutes(text) {
 }
 
 /**
- * BUG-67 (red): the top-level keys of pnpm-workspace.yaml that are outside the
- * settings it may hold. Nothing limits them today: BUG-11 and BUG-65 read only
- * `ROUTE`'s words and `${`, so every other key, `registries` among them, is
- * let through.
+ * BUG-67: the only top-level keys pnpm-workspace.yaml may hold. pnpm copies
+ * each into its settings, and the audit asks `registries.default`, so a
+ * `registries` key pointing at a server that reports no advisories passes the
+ * audit. Every other setting is refused too, whether or not it was ever shown
+ * to change the audit. The list stays short on purpose.
+ */
+const WORKSPACE_SETTINGS = new Set(['packages', 'catalog']);
+
+/**
+ * BUG-67: each top-level key of pnpm-workspace.yaml outside
+ * `WORKSPACE_SETTINGS`, as a finding, named as pnpm names it
+ * (`topLevelKeys`), so an escaped or quoted key, an alias or a sequence used
+ * as a key, and a `${…}` key are each read for what they are. A file that
+ * does not parse is refused through BUG-65's `unread`; one whose top level
+ * is not a mapping is refused here.
  */
 function workspaceUnlisted(text) {
-  return decodedYaml('pnpm-workspace.yaml', text).keys.filter(() => false);
+  const file = 'pnpm-workspace.yaml';
+  const { unread, topLevel } = decodedYaml(file, text);
+  if (topLevel === null) return [...unread, `${file}'s top level is not a mapping of settings`];
+  return [
+    ...unread,
+    ...topLevel
+      .filter((key) => !WORKSPACE_SETTINGS.has(key))
+      .map(
+        (key) =>
+          `${file} sets ${JSON.stringify(key)}, which is not among the settings it may hold (${[...WORKSPACE_SETTINGS].join(', ')}): adding one is a change to this test, and scripts/ is code-owned, so the owner approves it`,
+      ),
+  ];
 }
 
 /**
@@ -2636,6 +2705,77 @@ packages:
     ).toEqual({ text: false, bug65: [] });
     expect(workspaceUnlisted(text)).toEqual([
       'pnpm-workspace.yaml sets "registries", which is not among the settings it may hold (packages, catalog): adding one is a change to this test, and scripts/ is code-owned, so the owner approves it',
+    ]);
+  });
+
+  test('BUG-67: the top-level keys of pnpm-workspace.yaml are only the settings it may hold (WORKSPACE_SETTINGS)', () => {
+    const workspace = read('pnpm-workspace.yaml');
+    // The reader found the top-level keys, so "no other key" is read, not
+    // assumed.
+    expect(
+      decodedYaml('pnpm-workspace.yaml', workspace).topLevel,
+      'the YAML reader did not find the top-level keys of pnpm-workspace.yaml',
+    ).toContain('packages');
+    expect(
+      workspaceUnlisted(workspace),
+      'pnpm-workspace.yaml sets a top-level key outside WORKSPACE_SETTINGS: pnpm copies each into its settings, and a `registries` key there decides where the audit asks',
+    ).toEqual([]);
+  });
+
+  test("BUG-67: the workspace allowlist refuses every other top-level key, however YAML writes it, and passes today's file", () => {
+    const unlisted = (key) =>
+      `pnpm-workspace.yaml sets ${JSON.stringify(key)}, which is not among the settings it may hold (packages, catalog): adding one is a change to this test, and scripts/ is code-owned, so the owner approves it`;
+    const today = 'packages:\n  - apps/*\n  - packages/*\ncatalog:\n  zod: ^4.6.6\n';
+    expect(workspaceUnlisted(read('pnpm-workspace.yaml'))).toEqual([]);
+    expect(workspaceUnlisted(today)).toEqual([]);
+
+    // Each refused by the name pnpm reads it as. `registries` was shown to
+    // redirect the audit; `lockfileDir` was reported to, by #105's
+    // privacy-security-reviewer; `overrides` here is BUG-25's route; the
+    // rest are refused because they are not on the list.
+    const refused = {
+      'registries:\n  default: http://127.0.0.1:48731/': 'registries',
+      "registries:\n  '@trygghverdag': http://127.0.0.1:48731/": 'registries',
+      'registry: http://127.0.0.1:48731/': 'registry',
+      'lockfileDir: sub': 'lockfileDir',
+      'overrides:\n  zod: 3.25.76': 'overrides',
+      'httpsProxy: http://127.0.0.1:48732/': 'httpsProxy',
+      'strictSsl: false': 'strictSsl',
+      'ca: synthetic-ca': 'ca',
+      'auditConfig:\n  ignoreGhsas: [GHSA-86w9-cpqp-85rv]': 'auditConfig',
+      '"registries":\n  default: http://127.0.0.1:48731/': 'registries',
+      [String.raw`"\x72egistries":
+  default: http://127.0.0.1:48731/`]: 'registries',
+      '? [registries]\n: {default: http://127.0.0.1:48731/}': 'registries',
+      '"regis${TRYGG_UNSET-t}ries":\n  default: http://127.0.0.1:48731/':
+        'regis${TRYGG_UNSET-t}ries',
+    };
+    for (const [block, key] of Object.entries(refused)) {
+      expect(workspaceUnlisted(`${today}${block}\n`), block).toEqual([unlisted(key)]);
+    }
+
+    // An alias used as a key, its anchor set on a catalog entry.
+    expect(
+      workspaceUnlisted(
+        'packages:\n  - apps/*\ncatalog:\n  zod: &setting registries\n*setting :\n  default: http://127.0.0.1:48731/\n',
+      ),
+    ).toEqual([unlisted('registries')]);
+    // A `<<` merge: js-yaml, pnpm's parser, merges `registries` into the top
+    // level; `yaml` keeps `<<` as a key. Both it and the key that holds the
+    // anchor are refused.
+    expect(
+      workspaceUnlisted(
+        'defaults: &defaults\n  registries:\n    default: http://127.0.0.1:48731/\npackages:\n  - apps/*\n<<: *defaults\n',
+      ),
+    ).toEqual([unlisted('defaults'), unlisted('<<')]);
+
+    // A file that does not parse is refused through BUG-65's `unread`, and a
+    // top level that is not a mapping, which pnpm refuses too, here.
+    expect(workspaceUnlisted('registries: {default: http://127.0.0.1:48731/\n')).toEqual([
+      expect.stringMatching(/^pnpm-workspace\.yaml is not read as clean: /),
+    ]);
+    expect(workspaceUnlisted('- apps/*\n')).toEqual([
+      "pnpm-workspace.yaml's top level is not a mapping of settings",
     ]);
   });
 
