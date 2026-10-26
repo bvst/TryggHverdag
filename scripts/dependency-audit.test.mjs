@@ -86,11 +86,13 @@
  * ignoreGhsas behind `\u` escapes; pnpm-workspace.yaml with the key
  * `pnpm${TRYGG_UNSET-f}ile` naming a hook file whose updateConfig set
  * auditConfig; and the .npmrc naming that hook behind a JSON-quoted escape or
- * the same fallback. It exited 1 with none of them. Neither file has a code
- * owner, so a pull request touching only one could silence the required
- * `security` check. Now each is also read as pnpm reads it, with the text
- * check kept as a belt. A workflow, which GitHub reads as YAML, is read
- * decoded as well, for the same words and for the audit command.
+ * the same fallback. It exited 1 with none of them. Neither file had a code
+ * owner (D-144 gives each one in #105), so a pull request touching only one
+ * could silence the required `security` check. Now each is also read as pnpm
+ * reads it, with the text check kept as a belt. A workflow, which GitHub reads
+ * as YAML, is read decoded as well, for the same words and for the audit
+ * command. Every route this file refuses is refused only when it runs, and in
+ * CI a pnpm setting can stop it running (BUG-69, under "Not pinned").
  *
  * BUG-66 is a setting none of those words names: `registry`. pnpm sends the
  * audit to the registry the root .npmrc names, and CI's `security` job
@@ -118,8 +120,7 @@
  * pnpm's parser names them. That also refuses an `overrides:` key here,
  * BUG-25's route through this file; BUG-25's other parts are not checked
  * here. `httpsProxy`, `strictSsl` and `ca` were not tried, and are refused
- * by the list either way. D-144, a code owner for the file, still follows
- * #105.
+ * by the list either way. D-144 gives the file a code owner in #105.
  *
  * Then a lone CR, found by #105's privacy-security-reviewer at e57543d. pnpm
  * 10.33.0's reader breaks a line at a CR with no LF after it, as the YAML spec
@@ -269,11 +270,25 @@
  *
  * Not pinned:
  *   - the audit's result;
+ *   - that these tests run at all (BUG-69). In CI they run through
+ *     `pnpm run test:unit`, and pnpm 10.33.0 runs every script with the shell
+ *     named by `scriptShell` in pnpm-workspace.yaml, `script-shell` in the
+ *     root .npmrc, or a root .pnpmfile.cjs's `updateConfig` hook. With any one
+ *     of the three, every `pnpm run` check exits 0 having run nothing
+ *     (2026-10-26). These tests refuse all three (the line grammar and
+ *     `WORKSPACE_SETTINGS`, the byte pin and `RC_SETTINGS`, BUG-11's root
+ *     pnpmfile check), but not in a run they never reach. So in CI each
+ *     route is closed by the owner's review: D-144 makes all three
+ *     code-owned in #105, the pnpmfile before it exists. A check that runs
+ *     before pnpm in CI is queued as BUG-69's follow-up. A package's own
+ *     .npmrc with `script-shell` changed the shell only for a run started in
+ *     that package's folder, not from the root; none exists;
  *   - an audit command or a setting that a workflow builds while it runs:
  *     shell quoting or variables (`pnpm "au"dit`), a GitHub expression
  *     (`${{ … }}`) or a repository variable. A workflow is read as GitHub
  *     decodes it, not as the shell runs it. Workflows have a code owner
- *     (.github/); pnpm-workspace.yaml and the .npmrc do not;
+ *     (.github/), and pnpm-workspace.yaml and the .npmrc have one from D-144
+ *     (#105);
  *   - a workflow that sets `npm_config_registry`, or another `npm_config_*`
  *     variable whose name holds none of `ROUTE`'s words, or runs
  *     `pnpm config set registry`: not checked here. Workflows are under the
@@ -283,7 +298,8 @@
  *     audit, and it can rewrite .npmrc or the job's environment, which checks
  *     of the checked-in files cannot see. Queued as BUG-68: install
  *     with `--ignore-scripts` in the `security` job, and check the workspace
- *     package.json files;
+ *     package.json files. Until then the owner's review stands in: with
+ *     D-144 (#105), every workspace package.json has a code owner;
  *   - where `yaml` 2.9.1, the parser used here, and pnpm's read YAML
  *     differently beyond the differences found (see `yamlLibrary`). For
  *     pnpm-workspace.yaml the line grammar depends on neither. A workflow is
@@ -291,9 +307,9 @@
  *   - an .npmrc in a workspace package, which nothing here reads: a
  *     `registry` line in apps/mobile/.npmrc did not redirect the audit (tried
  *     2026-10-26). In pnpm-workspace.yaml a `registry` key did not either,
- *     but `registries` did: BUG-67's route, now refused by
- *     `WORKSPACE_SETTINGS`, as is `lockfileDir`, reported by #105's
- *     privacy-security-reviewer;
+ *     but `registries` did: BUG-67's route, now refused here by
+ *     `WORKSPACE_SETTINGS` (in CI, only when this file runs: BUG-69 above),
+ *     as is `lockfileDir`, reported by #105's privacy-security-reviewer;
  *   - pnpm settings outside the repository (a runner's own user or global
  *     config);
  *   - the spike's own lockfile, spikes/background-safety/app/pnpm-lock.yaml,
