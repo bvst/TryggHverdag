@@ -611,6 +611,45 @@ describe("this repository's own workflows", () => {
   ];
   const D139_APPS_FILES = D139_FILES.filter((owned) => owned.startsWith('/apps/'));
 
+  /**
+   * BUG-69 (D-144): every CI check runs through `pnpm run`, the unit run that
+   * holds scripts/dependency-audit.test.mjs among them. pnpm 10.33.0 takes the
+   * shell it hands each script to from `scriptShell` in pnpm-workspace.yaml,
+   * `script-shell` in the root .npmrc, or a root .pnpmfile.cjs whose
+   * updateConfig hook sets it. One line in any of them, and every check goes
+   * green having run nothing (reproduced with pnpm 10.33.0, 2026-10-26: a
+   * script that exits 1 exited 0 and did not run). None of the three had a
+   * code owner, and the tests that refuse those lines are the ones the shell
+   * skips. pnpm-lock.yaml decides what the install fetches and what the audit
+   * reads. The two workspace package.json files had no owner, and their
+   * install scripts run in CI before the audit (BUG-68); /package.json and
+   * /apps/mobile/package.json were owned already. The owner decided all six
+   * on 2026-10-26 (D-144). Written as OWNER_APPROVAL_PATHS writes a path:
+   * from the root.
+   *
+   * /.pnpmfile.cjs does not exist, and must not: BUG-11's test in
+   * scripts/dependency-audit.test.mjs refuses any root file with "pnpmfile"
+   * in its name. It is owned before it exists, as SEC-06's /.gitleaks.toml
+   * is, because the pull request that adds one is the one to stop. Its hook
+   * can stop the very `pnpm run` that would run BUG-11's test.
+   *
+   * One list for both halves, as D139_FILES is: the one /apps/ path among the
+   * six, /apps/server/package.json, is read from it as a named exception in
+   * the filter test below, not copied. The pair of BUG-69 tests after BUG-8's
+   * reads all six.
+   */
+  const D144_FILES = [
+    '/pnpm-workspace.yaml',
+    '/pnpm-lock.yaml',
+    '/.npmrc',
+    '/.pnpmfile.cjs',
+    '/apps/server/package.json',
+    '/packages/contracts/package.json',
+  ];
+  const D144_APPS_FILES = D144_FILES.filter((owned) => owned.startsWith('/apps/'));
+  /** The one D-144 path that is owned while absent: a root pnpmfile is refused, not kept. */
+  const ABSENT_PNPMFILE = '/.pnpmfile.cjs';
+
   test('the safety filter in ai-review.yml matches the paths the owner must approve', () => {
     // Two copies of the same list: the paths CODEOWNERS holds for the owner,
     // and the paths that summon safety-reviewer. If they drift, a safety change
@@ -659,13 +698,27 @@ describe("this repository's own workflows", () => {
     // required in the filter. The two /packages/contracts/ files of the
     // eleven are not /apps/ paths, so they are not excepted here: this test
     // does not read them.
+    //
+    // One more, by Claude's choice under D-144 (D-031), the same kind of
+    // choice as D-139's filter: /apps/server/package.json, the one /apps/
+    // path of the six that steer pnpm (BUG-69), D144_APPS_FILES, read from
+    // D144_FILES above. A workspace package.json holds dependencies and
+    // scripts, not safety logic. privacy-security-reviewer runs on every pull
+    // request, and dependencies and install scripts are in its brief
+    // (BUG-68). Leaving the filter alone means #105 does not edit
+    // ai-review.yml, so CI's reviewers can still run on it (D-075). RG-03
+    // (BUG-69, D-144): this narrows the test by that one file and no other.
+    // The pin stays exact, now at eleven, and every other /apps/ owner path
+    // is still required in the filter. /packages/contracts/package.json, also
+    // one of the six, is not under /apps/, so this test does not reach it
+    // (the filter lists packages/contracts/** already).
     const text = readFileSync(`${WORKFLOWS}/ai-review.yml`, 'utf8');
     const safety = filterEntries(text, 'safety');
     const appsPaths = OWNER_APPROVAL_PATHS.filter((p) => p.startsWith('/apps/'));
-    const exceptions = [...D102_FILES, ...D139_APPS_FILES];
+    const exceptions = [...D102_FILES, ...D139_APPS_FILES, ...D144_APPS_FILES];
     const safetyPaths = appsPaths.filter((p) => !exceptions.includes(p));
 
-    expect(exceptions, 'the named exceptions (D-102, amended; D-139, amended)').toEqual([
+    expect(exceptions, 'the named exceptions (D-102, amended; D-139, amended; D-144)').toEqual([
       '/apps/server/src/log.ts',
       '/apps/server/src/config.ts',
       '/apps/server/src/bin/api.ts',
@@ -676,6 +729,7 @@ describe("this repository's own workflows", () => {
       '/apps/mobile/package.json',
       '/apps/mobile/src/features/grp/join-key.ts',
       '/apps/server/src/redact.ts',
+      '/apps/server/package.json',
     ]);
     expect(safety.headers, 'how many filters are named safety').toBe(1);
     expect(safety.unreadable).toEqual([]);
@@ -954,36 +1008,9 @@ describe("this repository's own workflows", () => {
     }
   });
 
-  // BUG-69 (D-144): every CI check runs through `pnpm run`, the unit run that
-  // holds scripts/dependency-audit.test.mjs among them. pnpm 10.33.0 takes the
-  // shell it hands each script to from `scriptShell` in pnpm-workspace.yaml,
-  // `script-shell` in the root .npmrc, or a root .pnpmfile.cjs whose
-  // updateConfig hook sets it. One line in any of them, and every check goes
-  // green having run nothing (reproduced with pnpm 10.33.0, 2026-10-26: a
-  // script that exits 1 exited 0 and did not run). None of the three had a
-  // code owner, and the tests that refuse those lines are the ones the shell
-  // skips. pnpm-lock.yaml decides what the install fetches and what the audit
-  // reads. The two workspace package.json files had no owner, and their
-  // install scripts run in CI before the audit (BUG-68); /package.json and
-  // /apps/mobile/package.json were owned already. The owner decided all six
-  // on 2026-10-26 (D-144). Written as OWNER_APPROVAL_PATHS writes a path:
-  // from the root.
-  //
-  // /.pnpmfile.cjs does not exist, and must not: BUG-11's test in
-  // scripts/dependency-audit.test.mjs refuses any root file with "pnpmfile" in
-  // its name. It is owned before it exists, as SEC-06's /.gitleaks.toml is,
-  // because the pull request that adds one is the one to stop. Its hook can
-  // stop the very `pnpm run` that would run BUG-11's test.
-  const D144_FILES = [
-    '/pnpm-workspace.yaml',
-    '/pnpm-lock.yaml',
-    '/.npmrc',
-    '/.pnpmfile.cjs',
-    '/apps/server/package.json',
-    '/packages/contracts/package.json',
-  ];
-  /** The one D-144 path that is owned while absent: a root pnpmfile is refused, not kept. */
-  const ABSENT_PNPMFILE = '/.pnpmfile.cjs';
+  // BUG-69 (D-144): the six paths that steer pnpm, and their ownership, pinned
+  // with D144_FILES (declared beside D139_FILES, above the safety filter
+  // test, which names its one /apps/ path as an exception).
 
   test('BUG-69: the files pnpm reads its settings and hooks from, and the two workspace package.json files without an owner, are paths the owner must approve (D-144)', () => {
     const present = D144_FILES.filter((owned) => owned !== ABSENT_PNPMFILE);
