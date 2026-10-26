@@ -239,6 +239,16 @@
  *     (`${{ … }}`) or a repository variable. A workflow is read as GitHub
  *     decodes it, not as the shell runs it. Workflows have a code owner
  *     (.github/); pnpm-workspace.yaml and the .npmrc do not;
+ *   - a workflow that sets `npm_config_registry`, or another `npm_config_*`
+ *     variable whose name holds none of `ROUTE`'s words, or runs
+ *     `pnpm config set registry`: not checked here. Workflows are under the
+ *     code-owned .github/;
+ *   - a workspace package's `preinstall`, `install`, `postinstall` or
+ *     `prepare`: CI's `pnpm install --frozen-lockfile` runs it before the
+ *     audit, and it can rewrite .npmrc or the job's environment, which checks
+ *     of the checked-in files cannot see. Queued as its own bug: install
+ *     with `--ignore-scripts` in the `security` job, and check the workspace
+ *     package.json files;
  *   - where `yaml` 2.9.1, the parser used here, and pnpm's own read YAML
  *     differently, beyond the fixtures here, which both read alike. pnpm's is
  *     bundled into pnpm and cannot be loaded; the two differences found, a
@@ -2273,8 +2283,10 @@ describe('the dependency audit ignores what the owner accepted, and nothing else
     const wrapped = String.raw`engine-strict=true
 '"\u0070npmfile"'=hooks.cjs
 `;
-    const fromEnvironment = 'engine-strict=true\npnpm${TRYGG_UNSET-f}ile=hooks.cjs\n';
-    for (const text of [escaped, wrapped, fromEnvironment]) {
+    // RG-03: named `fromEnvironment` until code-reviewer on #105 found it
+    // shadowing the module's helper of that name; renamed, nothing else.
+    const envFilled = 'engine-strict=true\npnpm${TRYGG_UNSET-f}ile=hooks.cjs\n';
+    for (const text of [escaped, wrapped, envFilled]) {
       expect(ROUTE.test(text), `the fixture names no hook setting in its text: ${text}`).toBe(
         false,
       );
@@ -2283,11 +2295,11 @@ describe('the dependency audit ignores what the owner accepted, and nothing else
     expect({
       escaped: rcRoutes(escaped),
       wrapped: rcRoutes(wrapped),
-      fromEnvironment: rcRoutes(fromEnvironment),
+      envFilled: rcRoutes(envFilled),
     }).toEqual({
       escaped: ['.npmrc: "pnpmfile", decoded, names pnpmfile'],
       wrapped: ['.npmrc: "pnpmfile", decoded, names pnpmfile'],
-      fromEnvironment: [
+      envFilled: [
         '.npmrc: the key "pnpm${TRYGG_UNSET-f}ile" is filled in from the environment before pnpm reads it',
       ],
     });
@@ -2663,6 +2675,12 @@ packages:
     for (const [line, name] of Object.entries(refused)) {
       expect(rcUnlisted(`engine-strict=true\n${line}\n`), line).toEqual([unlisted(name)]);
     }
+    // A lone CR ends a line too: ini splits on `[\r\n]+`. This exact file made
+    // `pnpm audit --audit-level high` exit 0 against a registry reporting no
+    // advisories (2026-10-26). A CRLF, above, cannot tell the two apart.
+    expect(rcUnlisted('engine-strict=true\rregistry=http://127.0.0.1:48731/\n')).toEqual([
+      unlisted('registry'),
+    ]);
     // A section is a name too, and refused; the allowed name inside it is not.
     expect(rcUnlisted('[registry]\nengine-strict=true\n')).toEqual([unlisted('registry')]);
     // An escaped `registry` passes BUG-65's checks: only the allowlist sees it.
