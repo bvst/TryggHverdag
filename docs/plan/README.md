@@ -72,8 +72,8 @@ line or a `registries:` key redirects the audit; each is caught by a test) and B
 every CI check goes green: `privacy-security-reviewer`'s BLOCK on #105, and open on
 `main` already). Tests run through `pnpm run` cannot close BUG-69, so the owner chose
 on 2026-10-26 to put D-144 into #105: six pnpm files get a code owner. Its lines in
-`.github/CODEOWNERS` and `OWNER_APPROVAL_PATHS` are still to be made, and a Node check
-before pnpm in CI is queued as its own pull request after #105, as is BUG-68 (a
+`.github/CODEOWNERS` and `OWNER_APPROVAL_PATHS` are made (`e61b03e`, on #105's branch; `main` has
+them once #105 merges), and a Node check before pnpm in CI is queued as its own pull request after #105, as is BUG-68 (a
 workspace package's install script runs in CI's `security` job before the audit).
 Queued for the owner to schedule: BUG-13 (`gate:full` miscounts the steps that
 did not run after a failure), BUG-16 (`req:coverage` counts an ID named in a

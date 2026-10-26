@@ -7216,13 +7216,18 @@ any other path is work, not a candidate for the same treatment.
 - **Consequences:**
   - **Where it lands.** In #105, by the owner's answer 2. `test-author`'s tests
     came first (RG-02): two tests in `scripts/gate.test.mjs`, named "BUG-69: …",
-    red in `2a0f6c2`; `dad32ba` adds the eleventh exception below.
-    `implementer` adds the six lines to both lists to turn them green. **When
+    red in `2a0f6c2`; `dad32ba` adds the eleventh exception below. **When
     this entry was written, neither list had any of the six** (read on the
-    branch at `dad32ba`, which has the red tests), so nothing here is in force
-    yet, and on `main` none of it is until #105 merges. #105 changes owner
-    paths (`scripts/`, this file), so it needs a code owner's approval like any
-    other pull request (D-042, D-071).
+    branch at `dad32ba`, which has the red tests). `implementer` then added
+    them in `e61b03e`: six lines in `scripts/lib/merge-rules.mjs` and six in
+    `.github/CODEOWNERS`, one each, naming `@bvst @urso-agent`, under a
+    comment citing D-144; `ai-review.yml` is unchanged. The tests that were
+    red pass with them (the `gate`, `merge-rules` and `dependency-audit` tests,
+    352 of 352, 2026-10-26). **They are on #105's branch only: `main` has
+    none of the six lines until #105 merges,** so the owner reviews these
+    files from then on, not before. #105 changes owner paths (`scripts/`,
+    `.github/`, this file), so it needs a code owner's approval like any other
+    pull request (D-042, D-071).
   - **The owner reviews every change to these files,** Dependabot's lockfile
     bumps included. The cost, stated plainly: a change to a dependency now
     waits for the owner, because the lockfile changes with it (CI installs
