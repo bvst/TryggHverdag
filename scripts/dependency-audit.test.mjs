@@ -620,6 +620,16 @@ function workspaceRoutes(text) {
 }
 
 /**
+ * BUG-67 (red): the top-level keys of pnpm-workspace.yaml that are outside the
+ * settings it may hold. Nothing limits them today: BUG-11 and BUG-65 read only
+ * `ROUTE`'s words and `${`, so every other key, `registries` among them, is
+ * let through.
+ */
+function workspaceUnlisted(text) {
+  return decodedYaml('pnpm-workspace.yaml', text).keys.filter(() => false);
+}
+
+/**
  * `ini` 1.3.8's `unsafe`, through which it reads a name. A name in double
  * quotes, or in single quotes around a JSON string, is `JSON.parse`d, so a
  * `\u` escape in it is decoded; one that does not parse loses only its single
@@ -2597,6 +2607,36 @@ packages:
     const escaped = `engine-strict=true\n"${jsonEscaped('registry')}"=http://127.0.0.1:48731/\n`;
     expect(rcRoutes(escaped)).toEqual([]);
     expect(rcUnlisted(escaped)).toEqual([unlisted('registry')]);
+  });
+
+  test("BUG-67: a pnpm-workspace.yaml that points the audit's registry elsewhere is refused", () => {
+    // Today's file, its comments left out, with a `registries:` block. pnpm
+    // copies the file's top-level keys into its settings, and the audit goes
+    // to `registries.default`: a server that answered every request with no
+    // advisories made `pnpm audit --audit-level high` exit 0, "No known
+    // vulnerabilities found", where the unchanged file exits 1, "2 high"
+    // (2026-10-26).
+    const text = [
+      'packages:',
+      '  - apps/*',
+      '  - packages/*',
+      '',
+      'catalog:',
+      '  typescript: ~6.0.3',
+      '  vitest: ^5.0.1',
+      '  zod: ^4.6.6',
+      "  '@types/node': ^22.19.4",
+      'registries:',
+      '  default: http://127.0.0.1:48731/',
+      '',
+    ].join('\n');
+    expect(
+      { text: ROUTE.test(text), bug65: workspaceRoutes(text) },
+      "the fixture passes today's checks: BUG-11's text check and BUG-65's decoded read",
+    ).toEqual({ text: false, bug65: [] });
+    expect(workspaceUnlisted(text)).toEqual([
+      'pnpm-workspace.yaml sets "registries", which is not among the settings it may hold (packages, catalog): adding one is a change to this test, and scripts/ is code-owned, so the owner approves it',
+    ]);
   });
 
   test("BUG-11: D-093's premise holds in the lockfile: node-forge comes only through Expo's command-line tool, at a version the advisory covers", () => {
