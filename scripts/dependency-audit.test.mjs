@@ -780,7 +780,10 @@ function workspaceUnlisted(text) {
  * under `packages:`, and a `name: range` entry under `catalog:`. A glob may not
  * start with `!`, `*` or `@`, nor a range with `>`, `|` or `-`: YAML reads
  * those as a tag, an alias, a reserved indicator, a folded or literal scalar,
- * or a list item.
+ * or a list item. Each of these claims has its own fixture in "each claim of
+ * the line grammar …", below. A sweep of 131 mutants of this grammar on
+ * 2026-10-26 (test-auditor on #105) left four alive, each of which changes
+ * no answer: the comment's `$`, and CR, LS or PS taken out of `LINE_BREAKS`.
  */
 const WORKSPACE_LINE = {
   blank: /^$/,
@@ -792,7 +795,12 @@ const WORKSPACE_LINE = {
 /** The top-level keys the grammar lets a line open, each at most once. */
 const WORKSPACE_SECTIONS = ['packages', 'catalog'];
 
-/** The characters a YAML reader may break a line at, besides LF: CR, NEL, LS and PS. */
+/**
+ * The characters a YAML reader may break a line at, besides LF: CR, NEL, LS
+ * and PS. CR, LS and PS also match no shape's characters, and `.` does not
+ * match them, so only NEL, which `.` matches in a comment, needs this rule;
+ * the other three are refused twice.
+ */
 const LINE_BREAKS = [0x0d, 0x85, 0x2028, 0x2029].map((code) => String.fromCharCode(code));
 
 /** A line as JSON writes it, every character outside printable ASCII as a `\u` escape, so a CR, NEL, LS or PS shows. */
@@ -3062,6 +3070,12 @@ packages:
       'a range that starts with >': 'catalog:\n  zod: >=4.6.6\n',
       'packages: twice': `${today}packages:\n  - tools/*\n`,
       'a catalog entry under packages': 'packages:\n  - apps/*\n  zod: ^4.6.6\n',
+      // test-auditor on #105, at a0c11ed: two claims the grammar's comment
+      // made that no fixture pinned, and the NEL above being refused by the
+      // glob's characters rather than by the line-break rule.
+      'a range that starts with |': 'catalog:\n  zod: |\n',
+      'a header with a value': 'packages: [apps/*]\n',
+      'a NEL inside a comment': '# x\x85registries: x',
     };
     // One assertion, so a failure names every fixture let through.
     expect(
@@ -3090,6 +3104,137 @@ packages:
       'an LS',
       'a PS',
       'a glob that starts with *',
+      // RG-03: three entries added with test-auditor's three fixtures above,
+      // which the YAML-reading checks let through too. Nothing is removed.
+      'a range that starts with |',
+      'a header with a value',
+      'a NEL inside a comment',
+    ]);
+  });
+
+  test('BUG-67: each claim of the line grammar has a fixture that fails for that claim alone, or passes where the claim allows', () => {
+    // The line under test is the only one that may fail: it is added at the
+    // end of `packages:` (line 3), of `catalog:` (line 5), or at the top
+    // (line 1), among lines the grammar passes. Each entry is [text, lines
+    // refused].
+    const underPackages = (line) => `packages:\n  - apps/*\n${line}\ncatalog:\n  zod: ^4.6.6\n`;
+    const underCatalog = (line) => `packages:\n  - apps/*\ncatalog:\n  zod: ^4.6.6\n${line}\n`;
+    const atTop = (line) => `${line}\npackages:\n  - apps/*\n`;
+    const char = (code) => String.fromCharCode(code);
+    const claims = {
+      'lines split on LF alone: a CRLF line end ends no line': [
+        'packages:\r\n  - apps/*\r\n',
+        [1, 2],
+      ],
+      'the line-break rule: a NEL in a comment, which `.` matches': [
+        atTop(`# x${char(0x85)}registries: x`),
+        [1],
+      ],
+      'the line-break rule: a CR in a comment': [atTop('# x\rregistries: x'), [1]],
+      'the line-break rule: an LS in a comment': [atTop(`# x${char(0x2028)}registries: x`), [1]],
+      'the line-break rule: a PS in a comment': [atTop(`# x${char(0x2029)}registries: x`), [1]],
+      'a blank line is empty: not spaces': [underPackages('  '), [3]],
+      'a blank line may sit anywhere': [underPackages(''), []],
+      'a comment may follow spaces': [underPackages('  # a comment'), []],
+      'a comment may not follow a tab': [underPackages('\t# a comment'), [3]],
+      'a comment is a whole line: not after a glob': [underPackages('  - tools/* # x'), [3]],
+      'a comment is a whole line: not after an entry': [underCatalog('  vitest: ^5.0.1 # x'), [5]],
+      'a header is exactly `packages:`: not with a value': ['packages: [apps/*]\n', [1]],
+      'a header is exactly `catalog:`: not with a trailing space': [
+        'catalog: \n  zod: ^4.6.6\n',
+        [1, 2],
+      ],
+      '`packages:` at most once, and nothing under the second': [
+        'packages:\n  - apps/*\npackages:\n  - tools/*\n',
+        [3, 4],
+      ],
+      '`catalog:` at most once, and nothing under the second': [
+        'catalog:\n  zod: ^4.6.6\ncatalog:\n  vitest: ^5.0.1\n',
+        [3, 4],
+      ],
+      'no other top-level key, and nothing under one is in a section': [
+        'packages:\n  - apps/*\nregistries:\n  - tools/*\n',
+        [3, 4],
+      ],
+      'nothing indented before a header': ['  - apps/*\npackages:\n  - tools/*\n', [1]],
+      'a glob only under `packages:`': ['catalog:\n  - apps/*\n', [2]],
+      'an entry only under `catalog:`': ['packages:\n  zod: ^4.6.6\n', [2]],
+      'a glob is indented by two spaces: not three': [underPackages('   - tools/*'), [3]],
+      'a glob is indented by two spaces: not one': [underPackages(' - tools/*'), [3]],
+      'a glob follows `- `: not `-` alone': [underPackages('  -tools/*'), [3]],
+      'a glob is not empty': [underPackages('  - '), [3]],
+      'an entry is indented by two spaces: not three': [underCatalog('   vitest: ^5.0.1'), [5]],
+      'an entry is indented by two spaces: not one': [underCatalog(' vitest: ^5.0.1'), [5]],
+      'an entry has `: ` between name and range: not `:` alone': [
+        underCatalog('  vitest:^5.0.1'),
+        [5],
+      ],
+      'a range is not empty': [underCatalog('  vitest: '), [5]],
+      'a scoped name is single-quoted: not bare': [underCatalog('  @types/react: ^19.0.0'), [5]],
+      'a scoped name is single-quoted: not double-quoted': [
+        underCatalog('  "@types/react": ^19.0.0'),
+        [5],
+      ],
+    };
+    // Each character class, both ways: every character the comment allows
+    // passes, and every one of these others is refused, each in a line that
+    // fits but for it. Letters and digits are allowed in every class.
+    const others = [
+      '|',
+      '>',
+      '-',
+      '!',
+      '*',
+      '@',
+      '&',
+      '{',
+      '}',
+      '[',
+      ']',
+      ',',
+      '#',
+      "'",
+      '"',
+      ':',
+      '%',
+      '\t',
+      ' ',
+    ];
+    const classes = [
+      ['a glob first character', '_.', (c) => underPackages(`  - ${c}tools/*`), 3],
+      ['a glob character', '_./*@!-', (c) => underPackages(`  - tools/a${c}b`), 3],
+      ['a catalog name character', '_.-', (c) => underCatalog(`  vit${c}est: ^5.0.1`), 5],
+      [
+        'a quoted catalog name character',
+        '_.@/-',
+        (c) => underCatalog(`  '@types/re${c}act': ^19.0.0`),
+        5,
+      ],
+      ['a range first character', '^~<=', (c) => underCatalog(`  vitest: ${c}5.0.1`), 5],
+      ['a range character', '.^~<>=| +-', (c) => underCatalog(`  vitest: ^5.0${c}1`), 5],
+    ];
+    for (const [where, allowed, fixture, line] of classes) {
+      for (const c of allowed) claims[`${where} may be ${JSON.stringify(c)}`] = [fixture(c), []];
+      for (const c of others.filter((o) => !allowed.includes(o))) {
+        claims[`${where} may not be ${JSON.stringify(c)}`] = [fixture(c), [line]];
+      }
+    }
+    const refusedLines = (text) =>
+      workspaceLines(text).map((finding) => Number(/ line (\d+), /.exec(finding)[1]));
+    // One assertion, so a failure names every claim that no longer holds.
+    expect(
+      Object.fromEntries(
+        Object.entries(claims).map(([claim, [text]]) => [claim, refusedLines(text)]),
+      ),
+    ).toEqual(
+      Object.fromEntries(Object.entries(claims).map(([claim, [, lines]]) => [claim, lines])),
+    );
+
+    // The message quotes the line as JSON, every character outside printable
+    // ASCII as a `\u` escape, so a NEL shows.
+    expect(workspaceLines(`# x${char(0x85)}registries: x`)).toEqual([
+      'pnpm-workspace.yaml line 1, "# x\\' +
+        'u0085registries: x", is not a line this file may hold: adding a line shape is a change to this test, and scripts/ is code-owned, so the owner approves it',
     ]);
   });
 
