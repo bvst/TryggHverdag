@@ -1,6 +1,6 @@
 # Planning hub — walk-home safety app (working title)
 
-**Last updated:** 2026-10-25 · **Phase:** ✅ Planning complete → ✅ **M0 closed** (2026-09-29, D-083) → ✅ **M1 closed** (2026-10-01, D-088) → ✅ **M2 closed** (2026-10-23, D-142): the core safety loop on the server, all nine tasks done (D-090, D-115), closed on window B of REL-10-AC19, the staging canary on time for 24 hours, with BUG-63 open → 🟡 **M3 started** (2026-10-20, D-134): tasks 1 and 2 of 12 are done: GRP-01 (#96, squashed as `bd83b21` on 2026-10-21) and the home screen (GRP-02, CALL-01, CALL-02; #101, squashed as `05bfb73` on 2026-10-25, its step 1 #100, `50214c0`); task 3, start a journey (JRN-01, JRN-02, LOST-01's phone half), is next in D-134's order and not started; BUG-64, the dependency audit red on `main` since #101 merged, is fixed first on the session branch (the owner's answer is D-143, 2026-10-25; red `8d437af`, green `e47dee5`; its pull request is to be opened), and [../progress.md](../progress.md) has where the rest stands
+**Last updated:** 2026-10-26 · **Phase:** ✅ Planning complete → ✅ **M0 closed** (2026-09-29, D-083) → ✅ **M1 closed** (2026-10-01, D-088) → ✅ **M2 closed** (2026-10-23, D-142): the core safety loop on the server, all nine tasks done (D-090, D-115), closed on window B of REL-10-AC19, the staging canary on time for 24 hours, with BUG-63 open → 🟡 **M3 started** (2026-10-20, D-134): tasks 1 and 2 of 12 are done: GRP-01 (#96, squashed as `bd83b21` on 2026-10-21) and the home screen (GRP-02, CALL-01, CALL-02; #101, squashed as `05bfb73` on 2026-10-25, its step 1 #100, `50214c0`); task 3, start a journey (JRN-01, JRN-02, LOST-01's phone half), is next in D-134's order and not started; BUG-64, the dependency audit red on `main` after #101 merged, is done (#104, squashed as `35a3290` on 2026-10-26; the owner's answer is D-143, 2026-10-25), and [../progress.md](../progress.md) has where the rest stands
 
 **Current section:** milestone M3, started 2026-10-20 (D-134). **Milestone M2
 is closed** (2026-10-23, D-142). It started 2026-10-01 with SM-01; all nine
@@ -32,11 +32,13 @@ owner's answers (D-141, 2026-10-22), and its step 1, which makes four folders of
 `apps/mobile` (`src/features/call/`, `src/shared/ui/`, `src/app/` and `e2e/`)
 code-owner and safety-review paths, was merged as #100 (`50214c0`, 2026-10-22). The
 owner kept the 112 button's name on WCAG 2.5.3 (2026-10-23). **`main`'s dependency
-audit has been red since #101 merged** (BUG-64): two high advisories, one in zod and
-one in undici, were published or changed in npm's data after #101's last green run. The owner answered
-on 2026-10-25 (D-143): fix what has a patch, and accept GHSA-mrhx-c7xc-m3w5 for
-Expo's tool's own zod only. BUG-64 is fixed on the session branch (red `8d437af`,
-green `e47dee5`), and its pull request is to be opened. The next task is task 3 in D-134's order, start a
+audit was red from #101's merge until BUG-64** (two high advisories, one in zod and
+one in undici, published or changed in npm's data after #101's last green run). The
+owner answered on 2026-10-25 (D-143): fix what has a patch, and accept
+GHSA-mrhx-c7xc-m3w5 for Expo's tool's own zod only. BUG-64 is done: #104 was
+squash-merged as `35a3290` on 2026-10-26, after `urso-agent` approved it, and
+`main`'s `ci` run (40279208647) succeeded, `security` included. The next task is
+task 3 in D-134's order, start a
 journey (JRN-01, JRN-02, LOST-01's phone half). The owner's other part is A-36
 (below): its plan and apply are done (2026-10-21), and the join in the app is left.
 The code-owner question from
@@ -61,7 +63,8 @@ edited L6 or L3 test file, and exited 1; #93, `20af31a`, 2026-10-20, D-133)
 and BUG-61 (a new `vite` advisory failed the dependency audit; fixed in
 GRP-01's #96, `bd83b21`, 2026-10-21) and BUG-17 (the Android emulator sometimes
 stayed in English past the wait; `e2e:android` now switches it to bokmål itself;
-#99, `3d2255c`, 2026-10-22, D-140).
+#99, `3d2255c`, 2026-10-22, D-140) and BUG-64 (a new zod advisory and an undici one
+failed the dependency audit on `main`; #104, `35a3290`, 2026-10-26, D-143).
 Queued for the owner to schedule: BUG-13 (`gate:full` miscounts the steps that
 did not run after a failure), BUG-16 (`req:coverage` counts an ID named in a
 comment), BUG-19 (no test checks every owner-approval path keeps its owners),
@@ -186,8 +189,9 @@ twelve tasks, one at a time, GRP-01 first. GRP-01 (sign-in and groups) is done:
 [../progress/m3.md](../progress/m3.md); the owner's part is A-36: its plan and
 apply are done, and the join in the app is left. Task 2, the home screen, is done
 too: #101, squashed as `05bfb73` on 2026-10-25 (D-141; step 1 was #100,
-`50214c0`). `main`'s dependency audit has been red since (BUG-64, fixed on the
-session branch, pull request to be opened; the owner's answer is D-143), and task 3, start a journey, is next:
+`50214c0`). BUG-64, the dependency audit red on `main` after it, is done
+(#104, `35a3290`, 2026-10-26; the owner's answer is D-143), and task 3, start a
+journey, is next:
 [../progress.md](../progress.md).
 
 **Open for M4** (not an owner action, so not in the to-do table below; it sits
@@ -290,7 +294,7 @@ session.
 | A-28 | Add `android-e2e` to the existing `main` ruleset's required checks (Settings → Rules → Rulesets → `main` → required status checks; edit the existing ruleset, do not import a second one), then re-run only the `gate-integrity` job on the INF-06 pull request. Open Dependabot pull requests will need a `@dependabot rebase` afterwards | INF-06 cannot merge otherwise: `gate:integrity` reads the branch's own `package.json` and goes red the moment `e2e:android` exists (D-042, D-060, CI-09) | ✅ Done (2026-09-28) — `android-e2e` is a required check on `main`, read back through the API; `gate-integrity` passed on #34 after it |
 | A-29 | Request a 30-day trial key for the location SDK shortly before M3's demo (transistorsoft.com/shop/trials/new); owner's own phones only | M3's internal demo (TestFlight, Google Play internal testing) needs the SDK to run in a release build, without buying the $399 licence yet (D-086) | ⬜ Open — due M3 |
 | A-30 | Send the Critical Alerts entitlement request ([`critical-alerts-request.md`](critical-alerts-request.md), Part D) once the Apple Developer account (A-02) exists | The app's lost-contact alert needs Apple's approval to break through a silenced iPhone (D-020, D-087, STORE-01) | ⬜ Open — due M4 at the latest |
-| A-31 | In GitHub, **Settings → Code security**: turn on **Dependabot alerts** and **Dependabot security updates** (the setup guide, [`merge-rules.md`](merge-rules.md), says they are on; GitHub's API said on 2026-10-03: "Dependabot alerts are disabled for this repository") | Between pull requests nothing else watches the dependencies, and the audit now ignores two advisories that have no fix yet (D-093, D-104): alerts are what will say when braces or node-forge ships one (found in BUG-15's privacy review) | ⬜ Open |
+| A-31 | In GitHub, **Settings → Code security**: turn on **Dependabot alerts** and **Dependabot security updates** (the setup guide, [`merge-rules.md`](merge-rules.md), says they are on; GitHub's API said on 2026-10-03: "Dependabot alerts are disabled for this repository") | Between pull requests nothing else watches the dependencies, and the audit now ignores three advisories that have no fix yet (D-093, D-104, D-143): alerts are what will say when braces, node-forge or a patched zod 3.x for `@expo/cli` ships one (found in BUG-15's privacy review). GitHub's API answered 403 "Dependabot alerts are disabled for this repository" on 2026-10-25 and again on 2026-10-26 | ⬜ Open |
 | A-32 | In Healthchecks.io, add a check named `staging-sms`: **Period 1 minute, Grace 2 minutes**, alerts to the same place as the others. Save its ping URL as the `staging` environment secret `HEALTHCHECKS_SMS_URL` | A failed SMS pages you through its own check (D-115, LOST-07). Needed before LOST-07's `infra-staging` plan, which stops with "Invalid value for variable" without it | ✅ Done — the owner, 2026-10-07. Not verified from a session: the secrets API is refused here. LOST-07's `infra-staging` plan is the first real check |
 | A-33 | After LOST-07 merges: run `infra-staging` with `plan`, then `apply`, and check within about 3 minutes that `staging-sms` has left `new` and shows a ping every minute, and that the worker's check still gets one ping a minute, not two (the two URLs must differ). **Do it straight after the merge's `deploy-staging` run:** the new code reads the worker's existing secret before any plan. If `staging-worker` pages first, read the worker's start lines in Clever Cloud's log for the staging app (the deploy job's log can end before them, BUG-27). A line beginning `worker: not checking in with Healthchecks.io: HEALTHCHECKS_WORKER_URL` means the watchdog is running and only its check-in stopped; the rest of the line says what is wrong with the secret. Re-copy it in the UUID form Healthchecks.io shows (`https://hc-ping.com/<uuid>`), then plan and apply. If the plan stops with "Invalid value for variable", read the message under it: it names the secret and what is wrong (D-116) | Puts the SMS check live. There is no live drill of a failing SMS in M2: staging has no journeys before task 9 (D-091) | ✅ Done — the owner, 2026-10-07: `infra-staging` plan (run 37678574920) and apply (run 37678702578, "Apply complete! Resources: 0 added, 1 changed", the app's environment, values hidden). Both ping URLs passed Terraform's UUID-only check. That `staging-sms` left `new` and each check gets one ping a minute is the owner's observation, not verified from a session (Healthchecks.io is not reachable from one) |
 | A-34 | **Before the plan:** in Healthchecks.io, add a check named `staging-canary`, **Period 15 minutes, Grace 20 minutes**, alerts to the same place as the others. Save its ping URL, in the UUID form Healthchecks.io shows (`https://hc-ping.com/<uuid>`), as the `staging` environment secret `HEALTHCHECKS_CANARY_URL`. Never another check's URL. About 3 minutes | A failed or stopped canary pages you through its own check (D-127 Q3, D-128, REL-10). Needed before REL-10's `infra-staging` plan, which stops with "Invalid value for variable" without it | ✅ **Done** — 2026-10-20: `staging-canary` created and its ping URL saved as the `staging` secret; the plan then read it |

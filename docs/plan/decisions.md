@@ -7023,3 +7023,16 @@ any other path is work, not a candidate for the same treatment.
     D-104 name. A session could not read the alerts setting (GitHub's API
     answered 403 on 2026-10-25), so whether they are on now is not verified.
   - Supersedes nothing.
+- **Corrected 2026-10-26, statements of fact** (the text above stays as
+  written; `test-author` and `privacy-security-reviewer` on #104):
+  - "green is `e47dee5`": on its own tree, `e47dee5` fails 2 of 29 tests in
+    `scripts/dependency-audit.test.mjs`, the two that need this entry ("BUG-11:
+    every advisory the audit ignores is accepted by a decision" and "BUG-15,
+    BUG-64: …exactly the three…"). The green is `e47dee5` and `3092a35`, which
+    adds this entry, together; #104 merged both as `35a3290`, and `main`'s
+    `security` job passed on it (`ci` run 40279208647).
+  - "whether they are on now is not verified": verified off. GitHub's API
+    answers 403 "Dependabot alerts are disabled for this repository." (read
+    2026-10-25 and again 2026-10-26). So nothing automated would notice a
+    change to this advisory, such as a patched zod 3.x; turning the alerts on
+    is the owner's A-31.
