@@ -65,13 +65,23 @@ GRP-01's #96, `bd83b21`, 2026-10-21) and BUG-17 (the Android emulator sometimes
 stayed in English past the wait; `e2e:android` now switches it to bokmål itself;
 #99, `3d2255c`, 2026-10-22, D-140) and BUG-64 (a new zod advisory and an undici one
 failed the dependency audit on `main`; #104, `35a3290`, 2026-10-26, D-143).
+**In #105, not merged:** BUG-65, BUG-66 and BUG-67 (the audit-settings check read
+`pnpm-workspace.yaml` and `.npmrc` as text where pnpm decodes them, and a `registry=`
+line or a `registries:` key redirects the audit; each is caught by a test) and BUG-69
+(one line in either file, or a root `.pnpmfile.cjs`, makes `pnpm run` run nothing, so
+every CI check goes green: `privacy-security-reviewer`'s BLOCK on #105, and open on
+`main` already). Tests run through `pnpm run` cannot close BUG-69, so the owner chose
+on 2026-10-26 to put D-144 into #105: six pnpm files get a code owner. Its lines in
+`.github/CODEOWNERS` and `OWNER_APPROVAL_PATHS` are still to be made, and a Node check
+before pnpm in CI is queued as its own pull request after #105, as is BUG-68 (a
+workspace package's install script runs in CI's `security` job before the audit).
 Queued for the owner to schedule: BUG-13 (`gate:full` miscounts the steps that
 did not run after a failure), BUG-16 (`req:coverage` counts an ID named in a
 comment), BUG-19 (no test checks every owner-approval path keeps its owners),
 BUG-20 (graphile-worker's own logger prints its error object, past `log.ts`),
 BUG-22 (the test-weakening check does not see the shared behaviour suites),
-BUG-25 (an override in the unowned `pnpm-workspace.yaml` could hide an
-advisory), BUG-27 (whether the worker's session limits are in force on a deploy
+BUG-25 (an override in `pnpm-workspace.yaml` could hide an advisory; D-144
+gives the file a code owner, in #105), BUG-27 (whether the worker's session limits are in force on a deploy
 is seen only by chance), BUG-35 (a
 second stop signal ends the process before the pool is closed) and BUG-40
 (`affected.mjs` counts the agent-memory files and `decisions.md` as inert, so
