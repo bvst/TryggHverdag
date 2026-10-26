@@ -7030,7 +7030,10 @@ any other path is work, not a candidate for the same treatment.
     every advisory the audit ignores is accepted by a decision" and "BUG-15,
     BUG-64: …exactly the three…"). The green is `e47dee5` and `3092a35`, which
     adds this entry, together; #104 merged both as `35a3290`, and `main`'s
-    `security` job passed on it (`ci` run 40279208647).
+    `security` job passed on it (`ci` run 40279208647). `8d437af`,
+    `e47dee5` and `3092a35` are #104's branch commits from before its squash:
+    they do not resolve on `main`, and #104's Commits tab keeps them; on
+    `main`, `35a3290` is the commit to check.
   - "whether they are on now is not verified": verified off. GitHub's API
     answers 403 "Dependabot alerts are disabled for this repository." (read
     2026-10-25 and again 2026-10-26). So nothing automated would notice a
