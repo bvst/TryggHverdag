@@ -7024,7 +7024,7 @@ any other path is work, not a candidate for the same treatment.
     answered 403 on 2026-10-25), so whether they are on now is not verified.
   - Supersedes nothing.
 - **Corrected 2026-10-26, statements of fact** (the text above stays as
-  written; `test-author` and `privacy-security-reviewer` on #104):
+  written; `test-auditor` and `privacy-security-reviewer` on #104):
   - "green is `e47dee5`": on its own tree, `e47dee5` fails 2 of 29 tests in
     `scripts/dependency-audit.test.mjs`, the two that need this entry ("BUG-11:
     every advisory the audit ignores is accepted by a decision" and "BUG-15,
