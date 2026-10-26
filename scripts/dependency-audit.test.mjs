@@ -419,6 +419,55 @@ function wrongAudits(audits) {
   return audits.filter(({ command }) => command !== AUDIT_COMMAND);
 }
 
+// --- BUG-65: the settings files, read as pnpm and GitHub read them -----------
+
+/**
+ * BUG-65 (red): the check BUG-11's test makes of pnpm-workspace.yaml, as a
+ * function a fixture can be given to: the file's text, matched against
+ * `ROUTE`. Every finding, or none.
+ */
+function workspaceRoutes(text) {
+  const raw = ROUTE.exec(text);
+  return raw === null ? [] : [`pnpm-workspace.yaml mentions ${raw[0]} in its text`];
+}
+
+/** BUG-65 (red): BUG-11's check of the root .npmrc, as a function: its text, matched against `ROUTE`. */
+function rcRoutes(text) {
+  const raw = ROUTE.exec(text);
+  return raw === null ? [] : [`.npmrc mentions ${raw[0]} in its text`];
+}
+
+/** BUG-65 (red): BUG-11's check of a workflow, as a function: each line outside a whole-line comment. */
+function workflowRoutes(file, text) {
+  return text
+    .split('\n')
+    .filter((line) => !/^\s*#/.test(line) && ROUTE.test(line))
+    .map((line) => `${file}: ${line.trim()}`);
+}
+
+/** BUG-65 (red): the audit commands BUG-11's test selects from a workflow's lines, as written. */
+function workflowAudits(file, text) {
+  return auditCommands(file, text).map((audit) => ({ ...audit, read: 'as written' }));
+}
+
+/**
+ * BUG-65's reproduction: pnpm-workspace.yaml in today's shape, with the line
+ * privacy-security-reviewer found on #105 at its end. Both keys are written
+ * with `\u` escapes inside double quotes, which YAML decodes, so pnpm reads
+ * `auditConfig.ignoreGhsas` from it while the text names neither. With the
+ * root package.json's auditConfig removed, `pnpm audit --audit-level high`
+ * exited 0 on it, "2 high (2 ignored)", in a scratch copy of #105's head
+ * (2026-10-26), and 1 without the line.
+ */
+const ESCAPED_WORKSPACE = String.raw`packages:
+  - apps/*
+  - packages/*
+
+catalog:
+  zod: ^4.6.6
+"audit\u0043onfig": {"ignore\u0047hsas": ["GHSA-86w9-cpqp-85rv", "GHSA-vfj7-8cjw-p6xm", "GHSA-mrhx-c7xc-m3w5"]}
+`;
+
 // --- The lockfile ------------------------------------------------------------
 
 /** The fields of an importer or a snapshot that name what it depends on. */
@@ -1808,6 +1857,95 @@ describe('the dependency audit ignores what the owner accepted, and nothing else
     );
 
     expect(mentions, 'a workflow mentions an audit or hook setting').toEqual([]);
+  });
+
+  test('BUG-65: a pnpm-workspace.yaml that sets auditConfig behind escaped keys is refused, as pnpm decodes them', () => {
+    // The line found on #105. pnpm reads the file with js-yaml, which decodes
+    // each `\u` escape to its letter: the keys it sees are auditConfig and
+    // ignoreGhsas.
+    expect(
+      ROUTE.test(ESCAPED_WORKSPACE),
+      'the fixture is the bypass: its text names no audit or hook setting',
+    ).toBe(false);
+    expect(workspaceRoutes(ESCAPED_WORKSPACE)).toEqual([
+      'pnpm-workspace.yaml: "auditConfig", decoded, names auditConfig',
+      'pnpm-workspace.yaml: "ignoreGhsas", decoded, names ignoreGhsas',
+    ]);
+  });
+
+  test('BUG-65: a pnpm-workspace.yaml key that pnpm fills in from the environment is refused', () => {
+    // pnpm runs envReplace over every top-level key of the file before it
+    // reads the settings, and `${NAME-fallback}` is the fallback when NAME is
+    // unset: this key is `pnpmfile`. `pnpm audit --audit-level high` loaded
+    // the hook it names, a file without "pnpmfile" in its name, and ran its
+    // updateConfig, which set auditConfig: exit 0, "2 high (2 ignored)"
+    // (2026-10-26).
+    const text = 'packages:\n  - apps/*\n"pnpm${TRYGG_UNSET-f}ile": hooks.cjs\n';
+    expect(ROUTE.test(text), 'the fixture names no audit or hook setting in its text').toBe(false);
+    expect(workspaceRoutes(text)).toEqual([
+      'pnpm-workspace.yaml: the key "pnpm${TRYGG_UNSET-f}ile" is filled in from the environment before pnpm reads it',
+    ]);
+  });
+
+  test('BUG-65: a root .npmrc that names a pnpmfile behind a quoted, escaped name or an environment variable is refused, as pnpm reads it', () => {
+    // pnpm's ini parser JSON-decodes a quoted name, and then fills in
+    // `${…}` from the environment. Each of these loaded hooks.cjs, whose
+    // updateConfig set auditConfig: `pnpm audit --audit-level high` exited 0,
+    // "2 high (2 ignored)" (2026-10-26).
+    const escaped = String.raw`engine-strict=true
+"\u0070npmfile"=hooks.cjs
+`;
+    const wrapped = String.raw`engine-strict=true
+'"\u0070npmfile"'=hooks.cjs
+`;
+    const fromEnvironment = 'engine-strict=true\npnpm${TRYGG_UNSET-f}ile=hooks.cjs\n';
+    for (const text of [escaped, wrapped, fromEnvironment]) {
+      expect(ROUTE.test(text), `the fixture names no hook setting in its text: ${text}`).toBe(
+        false,
+      );
+    }
+    // One assertion, so a failure shows every case at once.
+    expect({
+      escaped: rcRoutes(escaped),
+      wrapped: rcRoutes(wrapped),
+      fromEnvironment: rcRoutes(fromEnvironment),
+    }).toEqual({
+      escaped: ['.npmrc: "pnpmfile", decoded, names pnpmfile'],
+      wrapped: ['.npmrc: "pnpmfile", decoded, names pnpmfile'],
+      fromEnvironment: [
+        '.npmrc: the key "pnpm${TRYGG_UNSET-f}ile" is filled in from the environment before pnpm reads it',
+      ],
+    });
+  });
+
+  test('BUG-65: a workflow that sets a pnpmfile, or runs another audit, behind YAML escapes is refused', () => {
+    // GitHub reads a workflow as YAML, so a double-quoted key or value reaches
+    // the runner decoded: an `npm_config_pnpmfile` variable, a
+    // `pnpm config set pnpmfile`, and a `pnpm audit --ignore-unfixable`, which
+    // writes ignoreCves and exits 0 instead of auditing.
+    const sample = String.raw`jobs:
+  security:
+    runs-on: ubuntu-latest
+    env:
+      "npm_config_\x70npmfile": hooks.cjs
+    steps:
+      - run: "pnpm config set \x70npmfile hooks.cjs"
+      - run: "pnpm \x61udit --ignore-unfixable"
+      - run: pnpm audit --audit-level high
+`;
+    // One assertion, so a failure shows both checks at once.
+    expect({
+      routes: workflowRoutes('sample.yml', sample),
+      audits: wrongAudits(workflowAudits('sample.yml', sample)).map(
+        (a) => `${a.read}: ${a.command}`,
+      ),
+    }).toEqual({
+      routes: [
+        'sample.yml: "npm_config_pnpmfile", decoded, names pnpmfile',
+        'sample.yml: "pnpm config set pnpmfile hooks.cjs", decoded, names pnpmfile',
+      ],
+      audits: ['decoded: pnpm audit --ignore-unfixable'],
+    });
   });
 
   test("BUG-11: D-093's premise holds in the lockfile: node-forge comes only through Expo's command-line tool, at a version the advisory covers", () => {
