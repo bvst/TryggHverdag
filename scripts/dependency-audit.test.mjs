@@ -121,6 +121,31 @@
  * by the list either way. D-144, a code owner for the file, still follows
  * #105.
  *
+ * Then a lone CR, found by #105's privacy-security-reviewer at e57543d. pnpm
+ * 10.33.0's reader breaks a line at a CR with no LF after it, as the YAML spec
+ * does; `yaml` 2.9.1 keeps it inside a scalar, with no error or warning. So
+ * `  - packages/*`, a CR, then `registries: {default: …}` was a registries
+ * key to pnpm (the audit exited 0 against the same server, 2026-10-26) and
+ * nothing to any check here. It is the fourth time the YAML model here has
+ * drifted from pnpm's, after escapes, the environment fill and a flow
+ * mapping. So two layers are added, and nothing is removed: `decodedYaml`
+ * refuses a lone CR in any YAML file it reads, workflows included; and
+ * `workspaceLines` reads pnpm-workspace.yaml with no YAML parser at all,
+ * against a grammar of today's line shapes, where a line that is none of
+ * them fails whatever a parser would make of it. The root .npmrc is pinned
+ * the same way, to its exact content. Deleting the decoded denylists now
+ * that the allowlists and the grammar exist (code-reviewer on #105) is
+ * follow-up 15.
+ *
+ * A correction, from the same review. The bundle first read for BUG-65,
+ * BUG-66 and BUG-67 was pnpm 10.28.0's (/opt/node-tools: the launcher, which
+ * hands over to the 10.33.0 that `packageManager` names), with
+ * `@zkochan/js-yaml` 0.0.9. Every claim here about pnpm's readers was read
+ * again on 2026-10-26 in 10.33.0's own bundle: its YAML reader is
+ * `@zkochan/js-yaml` 0.0.11, and every fixture's reading held; its .npmrc
+ * reader is the same `ini` 1.3.8. The end-to-end runs used the `pnpm`
+ * command, which is 10.33.0, and stand.
+ *
  * An ignore list is a quiet way to stop a gate from seeing anything, so these
  * tests read files instead of running the audit: a `pnpm audit` run reads the
  * registry's advisory data, which changes whenever an advisory is published, and
@@ -169,6 +194,16 @@
  *     `<<` kept as a key), is in `WORKSPACE_SETTINGS` (today `packages` and
  *     `catalog`), and the file's top level is a mapping. Adding a setting is
  *     a change to this test, in code-owned scripts/;
+ *   - BUG-67's lone CR: no YAML file read here holds a CR that is not part of
+ *     a CRLF line end;
+ *   - BUG-67's line grammar, with no YAML parser: every line of
+ *     pnpm-workspace.yaml, split on LF alone, is one of `WORKSPACE_LINE`'s
+ *     shapes in its place, so it holds no CR (a CRLF included), NEL, LS or
+ *     PS, no tab, no quote but around a scoped catalog name, no flow
+ *     collection, anchor, alias, tag or trailing comment, and no top-level
+ *     key but `packages:` and `catalog:`, each once. Adding a shape is a
+ *     change to this test, in code-owned scripts/;
+ *   - the root .npmrc is exactly `engine-strict=true` and a line feed;
  *   - D-093's premise, read from pnpm-lock.yaml (lockfile v9): the packages
  *     that depend on `node-forge` are exactly `@expo/cli` and
  *     `@expo/code-signing-certificates`, the second's only dependent is
@@ -249,11 +284,10 @@
  *     of the checked-in files cannot see. Queued as its own bug: install
  *     with `--ignore-scripts` in the `security` job, and check the workspace
  *     package.json files;
- *   - where `yaml` 2.9.1, the parser used here, and pnpm's own read YAML
- *     differently, beyond the fixtures here, which both read alike. pnpm's is
- *     bundled into pnpm and cannot be loaded; the two differences found, a
- *     `<<` merge and an unknown tag, are read where written or refused (see
- *     `yamlLibrary`);
+ *   - where `yaml` 2.9.1, the parser used here, and pnpm's read YAML
+ *     differently beyond the differences found (see `yamlLibrary`). For
+ *     pnpm-workspace.yaml the line grammar depends on neither. A workflow is
+ *     read by `yaml` alone: GitHub's reader was not compared;
  *   - an .npmrc in a workspace package, which nothing here reads: a
  *     `registry` line in apps/mobile/.npmrc did not redirect the audit (tried
  *     2026-10-26). In pnpm-workspace.yaml a `registry` key did not either,
@@ -319,7 +353,10 @@
  *     dependencies (drizzle-kit is a server dev dependency).
  *
  * What pnpm does with these settings was read in pnpm 10.33.0's own bundle
- * (dist/pnpm.cjs), not assumed:
+ * (dist/pnpm.cjs), not assumed. (BUG-11 wrote this on 2026-10-02. On
+ * 2026-10-26 BUG-67 re-read the first two items, the audit's two ignore
+ * lists and the settings taken from package.json, in 10.33.0's bundle, and
+ * they hold; the pnpmfile item was not re-read.)
  *   - the audit drops an advisory when
  *     `auditConfig.ignoreGhsas.includes(github_advisory_id)` (an exact,
  *     case-sensitive match), or when it has CVEs and every one is in
@@ -328,13 +365,15 @@
  *     and exit 0 instead of auditing;
  *   - `auditConfig` and `configDependencies` are read from the root
  *     package.json's `pnpm` field, and then every top-level key of
- *     pnpm-workspace.yaml is assigned over the config. BUG-65 read how: the
- *     file is parsed with `@zkochan/js-yaml` 0.0.9's `load` (a js-yaml 4
- *     fork) after a byte-order mark is stripped, and `envReplace` is run over
- *     each top-level key and each top-level string value first. The root
- *     .npmrc is parsed with `ini` 1.3.8 through @pnpm/npm-conf, and
- *     `envReplace` is run over each name. `envReplace` throws on a `${NAME}`
- *     that is unset and has no fallback;
+ *     pnpm-workspace.yaml is assigned over the config. BUG-65 read how, and
+ *     BUG-67 read it again in pnpm 10.33.0's bundle on 2026-10-26 (see the
+ *     correction above): the file is parsed with `@zkochan/js-yaml` 0.0.11's
+ *     `load` (a js-yaml 4 fork) after a byte-order mark is stripped, and
+ *     `envReplace` (`@pnpm/config.env-replace` 3.0.2) is run over each
+ *     top-level key and each top-level string value first. The root .npmrc
+ *     is parsed with `ini` 1.3.8, through @pnpm/npm-conf and config-chain,
+ *     and `envReplace` (1.1.0, the same code for this) is run over each name.
+ *     `envReplace` throws on a `${NAME}` that is unset and has no fallback;
  *   - when it reads its config, pnpm loads `.pnpmfile.cjs` from the root (or
  *     the `pnpmfile` setting's file instead), the `globalPnpmfile` setting's
  *     file, and the `pnpmfile.cjs` of each config dependency named like a pnpm
@@ -531,15 +570,21 @@ function wrongAudits(audits) {
  * for: if that peer ever goes, the BUG-65 tests fail and say why, and nothing
  * reads the files as clean.
  *
- * pnpm itself reads pnpm-workspace.yaml with `@zkochan/js-yaml` 0.0.9, a fork
- * of js-yaml 4 bundled into pnpm, which nothing here can load. Every fixture
- * below was read with both on 2026-10-26, and each route word pnpm's decodes,
- * `yaml` decodes too. The differences found are covered rather than modelled:
- * js-yaml applies a `<<` merge and `yaml` does not, but every scalar is read
- * where it is written, which is where a merge or an alias takes it from;
- * js-yaml throws on a tag it does not know, where `yaml` warns, and a warning
- * is refused here; and a `!!binary` key is its bytes' numbers to js-yaml and
- * their text here, which refuses more, not less.
+ * pnpm 10.33.0 reads pnpm-workspace.yaml with `@zkochan/js-yaml` 0.0.11, a
+ * fork of js-yaml 4 bundled into pnpm, which nothing here can load. (This
+ * said 0.0.9 until BUG-67: that is pnpm 10.28.0's, read by mistake.) Every
+ * fixture below was read with 0.0.11, taken from 10.33.0's bundle, on
+ * 2026-10-26. Each route word it decodes, `yaml` decodes too, except across a
+ * lone CR. The differences found are covered rather than modelled: js-yaml
+ * applies a `<<` merge and `yaml` does not, but every scalar is read where it
+ * is written, which is where a merge or an alias takes it from; js-yaml
+ * throws on a tag it does not know, where `yaml` warns, and a warning is
+ * refused here; a `!!binary` key is its bytes' numbers to js-yaml and their
+ * text here, which refuses more, not less; a CR with no LF after it is a line
+ * break to js-yaml and a character to `yaml`, and `decodedYaml` refuses it;
+ * and an undefined alias is an error to js-yaml, but to `yaml` only when it
+ * converts, which the walk never does. That drift is why `workspaceLines`
+ * reads the workspace file with no parser at all.
  */
 const yamlLibrary = (() => {
   let loaded = null;
@@ -587,6 +632,14 @@ function decodedYaml(file, text) {
   const unread = [...doc.errors, ...doc.warnings].map(
     (problem) => `${file} is not read as clean: ${problem.message.split('\n')[0]}`,
   );
+  // BUG-67: a CR with no LF after it breaks the line for the YAML spec and for
+  // pnpm's reader; `yaml` keeps it inside a scalar, with no error or warning.
+  const loneCr = /\r(?!\n)/.exec(text);
+  if (loneCr !== null) {
+    unread.push(
+      `${file} line ${text.slice(0, loneCr.index).split('\n').length} has a carriage return that is not part of a CRLF line end: the YAML spec, and pnpm's reader, break the line there, and this reader does not`,
+    );
+  }
   const scalars = [];
   const keys = [];
   let topLevel = [];
@@ -608,7 +661,8 @@ function decodedYaml(file, text) {
 
 /**
  * BUG-67: the top-level keys of a YAML document as js-yaml, pnpm's parser,
- * names them (read with pnpm 10.33.0's bundled loader, 2026-10-26): a
+ * names them (read again with the 0.0.11 loader from pnpm 10.33.0's bundle
+ * on 2026-10-26; first read with 10.28.0's 0.0.9, which agrees): a
  * scalar's text, an alias's target, a sequence's items joined by commas, a
  * mapping as `[object Object]`, an empty key as `null`. A `<<` stays a key of
  * its own here, where js-yaml merges what it names into the top level. Null
@@ -702,13 +756,75 @@ function workspaceUnlisted(text) {
 }
 
 /**
- * BUG-67 (red): the line shapes pnpm-workspace.yaml may hold, read without a
- * YAML parser. Nothing limits them today: every check reads the file through
- * `yaml`, so a line that `yaml` and pnpm's reader split differently is let
- * through.
+ * BUG-67: the shapes a line of pnpm-workspace.yaml may take, read from its raw
+ * text with no YAML parser. Every other check here reads the file through
+ * `yaml`, and that reading has drifted from pnpm's again and again: escapes,
+ * the environment fill, a flow mapping, a lone CR. A grammar of line shapes
+ * cannot drift that way: a line that is none of them fails, whatever a parser
+ * would make of it. The shapes are today's file's own: a blank line, a
+ * whole-line comment, `packages:` and `catalog:` (each once), a package glob
+ * under `packages:`, and a `name: range` entry under `catalog:`. A glob may not
+ * start with `!`, `*` or `@`, nor a range with `>`, `|` or `-`: YAML reads
+ * those as a tag, an alias, a reserved indicator, a folded or literal scalar,
+ * or a list item.
+ */
+const WORKSPACE_LINE = {
+  blank: /^$/,
+  comment: /^ *#.*$/,
+  glob: /^ {2}- [A-Za-z0-9_.][A-Za-z0-9_./*@!-]*$/,
+  entry: /^ {2}(?:[A-Za-z0-9_.-]+|'[A-Za-z0-9_.@/-]+'): [0-9A-Za-z^~<=][0-9A-Za-z.^~<>=| +-]*$/,
+};
+
+/** The top-level keys the grammar lets a line open, each at most once. */
+const WORKSPACE_SECTIONS = ['packages', 'catalog'];
+
+/** The characters a YAML reader may break a line at, besides LF: CR, NEL, LS and PS. */
+const LINE_BREAKS = [0x0d, 0x85, 0x2028, 0x2029].map((code) => String.fromCharCode(code));
+
+/** A line as JSON writes it, every character outside printable ASCII as a `\u` escape, so a CR, NEL, LS or PS shows. */
+function shown(line) {
+  return JSON.stringify(line).replace(
+    /[^\x20-\x7e]/g,
+    (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`,
+  );
+}
+
+/**
+ * BUG-67: each line of pnpm-workspace.yaml that is not one of
+ * `WORKSPACE_LINE`'s shapes in its place, as a finding. The text is split on
+ * LF alone, so a CR anywhere, a CRLF line end included, leaves a line that
+ * fits no shape; so does a NEL, LS or PS.
  */
 function workspaceLines(text) {
-  return text.split('\n').filter(() => false);
+  const file = 'pnpm-workspace.yaml';
+  const opened = new Set();
+  let section = null;
+  const fits = (line) => {
+    if ([...line].some((c) => LINE_BREAKS.includes(c))) return false;
+    if (WORKSPACE_LINE.blank.test(line) || WORKSPACE_LINE.comment.test(line)) return true;
+    const header = WORKSPACE_SECTIONS.find((name) => line === `${name}:`);
+    if (header !== undefined) {
+      section = opened.has(header) ? null : header;
+      opened.add(header);
+      return section !== null;
+    }
+    if (!line.startsWith(' ')) {
+      section = null;
+      return false;
+    }
+    if (section === 'packages') return WORKSPACE_LINE.glob.test(line);
+    if (section === 'catalog') return WORKSPACE_LINE.entry.test(line);
+    return false;
+  };
+  return text
+    .split('\n')
+    .flatMap((line, i) =>
+      fits(line)
+        ? []
+        : [
+            `${file} line ${i + 1}, ${shown(line)}, is not a line this file may hold: adding a line shape is a change to this test, and scripts/ is code-owned, so the owner approves it`,
+          ],
+    );
 }
 
 /**
@@ -751,7 +867,8 @@ function rcUnquoted(written) {
 
 /**
  * The names of an rc file's settings and sections, as pnpm 10.33.0 reads the
- * root .npmrc (read in its bundle, dist/pnpm.cjs, on 2026-10-26):
+ * root .npmrc (first read in 10.28.0's bundle by mistake, then in 10.33.0's
+ * on 2026-10-26, whose `ini` 1.3.8 is the same code):
  * @pnpm/npm-conf parses it with `ini` 1.3.8, whose `decode` splits the text
  * on line breaks, skips a line that starts with `;` or `#`, and reads a
  * `[section]`, or what comes before a line's first `=`, through `unsafe`
@@ -2931,6 +3048,41 @@ packages:
         .map(([name]) => name),
       'let through by the line grammar',
     ).toEqual([]);
+    // The YAML-reading checks let these through, so the grammar is the only
+    // layer that refuses them; they refuse the rest as well. Some set nothing
+    // pnpm reads (a CRLF, a NEL, a comment), but each is a shape this test
+    // does not need to read. The undefined alias `*/apps` is a parse error
+    // to pnpm's reader and none to `yaml`'s parseDocument: one more drift.
+    expect(
+      Object.entries(refused)
+        .filter(([, text]) => [...workspaceRoutes(text), ...workspaceUnlisted(text)].length === 0)
+        .map(([name]) => name),
+    ).toEqual([
+      'a CRLF copy',
+      'a flow mapping',
+      'a double-quoted key',
+      'an anchor and an alias',
+      'a tag',
+      'an inline comment after a value',
+      'a NEL',
+      'an LS',
+      'a PS',
+      'a glob that starts with *',
+    ]);
+  });
+
+  test("BUG-67: today's pnpm-workspace.yaml holds only the line shapes it may (WORKSPACE_LINE)", () => {
+    expect(
+      workspaceLines(read('pnpm-workspace.yaml')),
+      'pnpm-workspace.yaml holds a line outside the shapes this test reads without a YAML parser: pnpm copies its top-level keys into its settings, and a line a parser reads differently from pnpm can hide one',
+    ).toEqual([]);
+  });
+
+  test('BUG-66, BUG-67: the root .npmrc is exactly `engine-strict=true`, compared byte for byte, with no parser to drift from pnpm', () => {
+    expect(
+      existsSync(path.join(root, '.npmrc')) ? read('.npmrc') : '',
+      'the root .npmrc is not exactly "engine-strict=true\\n": pnpm reads its settings for the install and the audit. Changing it is a change to this test, and scripts/ is code-owned, so the owner approves it',
+    ).toBe('engine-strict=true\n');
   });
 
   test("BUG-11: D-093's premise holds in the lockfile: node-forge comes only through Expo's command-line tool, at a version the advisory covers", () => {
