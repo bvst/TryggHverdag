@@ -78,7 +78,13 @@ succeeded, `mutation-group` skipped, all five reviewers passed) and found one mo
 package's script from that package's folder, so a package's own `.npmrc` can make its typecheck pass having
 run nothing (verified 2026-10-26, open on `main` too); a test now refuses such files (`94cdebc`). A Node
 check before pnpm in CI is queued as its own pull request after #105, as is BUG-68 (a workspace package's
-install script runs in CI's `security` job before the audit).
+install script runs in CI before the audit and every other check). A second BLOCK, on `1f7e664`,
+found that the workspace took in `apps/*` and `packages/*`, so a new `apps/<new>/package.json`, which no
+CODEOWNERS line matches, ran its install scripts in every required job; the workspace now names its five
+packages by folder in two owned files (`586416f`, not yet pushed or re-reviewed), and D-144's claim that every
+workspace package's manifest has an owner is corrected: it held only for the packages that existed. BUG-68's fix is
+wider than planned: `--ignore-scripts` on every install before a required check, `ai-review.yml:180` included
+(a hand merge, D-075).
 Queued for the owner to schedule: BUG-13 (`gate:full` miscounts the steps that
 did not run after a failure), BUG-16 (`req:coverage` counts an ID named in a
 comment), BUG-19 (no test checks every owner-approval path keeps its owners),

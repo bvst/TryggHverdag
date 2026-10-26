@@ -7190,10 +7190,16 @@ any other path is work, not a candidate for the same treatment.
        server's dependencies.
     6. `/packages/contracts/package.json`: the same.
 
-    With these two, every workspace package's manifest has an owner:
-    `/apps/mobile/package.json`, `/packages/config/` and `/packages/test-kit/`
-    had one already, and so has the root `/package.json` (CODEOWNERS, read
-    2026-10-26).
+    With these two, the manifests of the five packages that existed each have
+    an owner: `/apps/mobile/package.json`, `/packages/config/` and
+    `/packages/test-kit/` had one already, and so has the root
+    `/package.json` (CODEOWNERS, read 2026-10-26). **Corrected 2026-10-26
+    (B1, below):** this paragraph first said "every workspace package's
+    manifest has an owner", which held only for the packages that existed. The
+    workspace took in `apps/*` and `packages/*`, so a new
+    `apps/<new>/package.json`, which no CODEOWNERS line matches, joined it and
+    ran its install scripts in CI. The workspace now names its five packages
+    (Consequences), and the sentence holds from #105's merge.
   - **They go in both lists that must agree:** `.github/CODEOWNERS`, and
     `OWNER_APPROVAL_PATHS` in `scripts/lib/merge-rules.mjs`, which
     `gate:integrity` (CI-01) checks against CODEOWNERS. Each is owned by
@@ -7201,7 +7207,11 @@ any other path is work, not a candidate for the same treatment.
     repository root, with its reason beside it as a comment (D-139's form).
   - **Who decided:** the owner decided the scope, six paths (answers 1 to 4).
     Claude chose the wording of each reason, the order, and the points under
-    Consequences (D-031).
+    Consequences (D-031), among them, after B1, that the workspace names its
+    packages by folder. That adds no path to the six and asks the owner for
+    nothing new; the owner's answer 3 was given when the records said owning
+    the two manifests covered BUG-68's route, which held for the two packages
+    that existed and not for a new one.
   - **Not in this decision:**
     - `/.nvmrc`, `/.node-version` and `/turbo.json`, which have no code owner
       either (tracked, and in neither CODEOWNERS nor `OWNER_APPROVAL_PATHS`,
@@ -7219,8 +7229,17 @@ any other path is work, not a candidate for the same treatment.
     - BUG-25's remaining route, `link:` and `file:` resolutions in the
       lockfile, which the owner's review of `/pnpm-lock.yaml` now covers but
       no test pins;
-    - BUG-68's fix (`--ignore-scripts` in the `security` job and a test), its
-      own pull request.
+    - BUG-68's fix, its own pull request, and wider than first planned
+      (`privacy-security-reviewer`'s S1 on `1f7e664`): `--ignore-scripts` on
+      every `pnpm install` that runs before a required check, not on the
+      `security` job's alone. `ci.yml` has ten installs (lines 57, 100, 138,
+      192, 237, 275, 306, 414, 581 and 786), and `ai-review.yml:180` installs
+      in a job with `id-token: write` and `pull-requests: write`, before the
+      step that is given the Claude secrets (read 2026-10-26). Editing
+      `ai-review.yml` is a hand merge (D-075). The planned test that refuses
+      install scripts in workspace `package.json` files runs after the
+      install, so it is a second line only. `daily-status.yml:81` also
+      installs; I did not look at it.
 - **Consequences:**
   - **Where it lands.** In #105, by the owner's answer 2. `test-author`'s tests
     came first (RG-02): two tests in `scripts/gate.test.mjs`, named "BUG-69: …",
@@ -7330,6 +7349,78 @@ any other path is work, not a candidate for the same treatment.
       session's run, and mine), and `tests:changes` reports none weakened.
       BUG-69's check before pnpm in CI stays queued, and refuses such files
       too.
+  - **The second BLOCK, B1, on `1f7e664` (2026-10-26).**
+    `privacy-security-reviewer` returned BLOCK (merge commit `a34530a`;
+    comment 6422534100). Claude's account of it, from the comment and the
+    coordinating session:
+    - **The route.** `pnpm-workspace.yaml` and the root `package.json`'s
+      `workspaces` took in `apps/*` and `packages/*`. A pull request that added
+      only `apps/<new>/package.json`, which no CODEOWNERS line matches (last
+      match wins), created a workspace package. Its `preinstall` or
+      `postinstall` runs during `pnpm install --frozen-lockfile` in every
+      required job, and in `ai-review.yml:180`'s install. It can write
+      `script-shell=/bin/true` to the root `.npmrc`, so every later `pnpm run`
+      passes having run nothing: BUG-69's route, by a path D-144 did not cover.
+    - **The lockfile does not stop it.** With the repository's real files and
+      an added `apps/evil/package.json` with no dependencies, the reviewer got
+      "Lockfile is up to date" (its probe on the real repository stopped
+      offline while fetching packages, after printing that line).
+      `pnpm-lock.yaml`, which this decision gives an owner, need not change.
+    - **Reproduced by the coordinating session** in a minimal pnpm 10.33.0
+      workspace: with `apps/*`, a package added after the lockfile, whose
+      `preinstall` appends `script-shell=/bin/true` to the root `.npmrc`:
+      `CI=1 pnpm install --frozen-lockfile` exits 0 and runs it, and the next
+      `pnpm run` of a failing script exits 0 without running it. With the
+      packages named, the same install leaves `.npmrc` alone ("Scope: all 2
+      workspace projects") and the failing script exits 1.
+    - **Neither planned follow-up closed it.** BUG-68's plan was
+      `--ignore-scripts` in `security` only, and BUG-69's check before pnpm
+      runs before the install, so before the script writes `.npmrc`.
+    - **This was not #105's doing:** the route is open on `main`. It was wrong
+      of the records to say it was covered: this decision's "every workspace
+      package's manifest has an owner" (corrected above) and the BUG-68 row's
+      "D-144 gives both an owner".
+    - **The fix, the reviewer's preferred one, chosen by Claude (D-031) and
+      using only owned files:** `a3170ff` (`test-author`, red) adds three
+      tests to `scripts/dependency-audit.test.mjs`: both lists must name
+      exactly `apps/mobile`, `apps/server`, `packages/config`,
+      `packages/contracts` and `packages/test-kit`, with no glob; each named
+      folder's `package.json` must be an owner path; every folder under
+      `apps/` and `packages/` with a `package.json` must be named.
+      `586416f` (`implementer`) makes `pnpm-workspace.yaml`'s `packages:` and
+      `package.json`'s `workspaces` name the five, with a comment saying why.
+      A new package now needs a change to two owned files, so "every
+      workspace package's manifest has an owner" holds from #105's merge.
+      `pnpm-lock.yaml` is unchanged (`git diff 1f7e664 HEAD`, 2026-10-26). The
+      implementer reports `CI=1 pnpm install --frozen-lockfile --offline`:
+      "Scope: all 6 workspace projects", "Lockfile is up to date". I ran
+      `imports:check` (passes) and the gate, merge-rules, gate-integrity,
+      dependency-audit, affected, decision, gate-decisions and drills tests:
+      687 of 687.
+    - **`014855b` (`test-author`, on `test-auditor`'s PASS on `1f7e664`):** its
+      S1 says pnpm 11 looks for `.pnpmfile.mjs` first (its reading of pnpm
+      11.25.0's bundle, not run), and nothing pinned pnpm's major, so a move
+      to pnpm 11 would leave a root `.pnpmfile.mjs` with no owner. A test pins
+      `package.json`'s `packageManager` to pnpm 10.x; its message says a move
+      to another major must first give each default pnpmfile name an owner,
+      `/.pnpmfile.mjs` for pnpm 11. `/package.json` is owned, so the move
+      itself needs the owner. The settings-file walk skips `.stryker-tmp`
+      (its N3), and `scripts/drills.test.mjs` reads a plain workspace folder
+      as well as `folder/*`. The check before pnpm should also refuse any
+      root file matching `/pnpmfile/i` (its suggestion).
+    - **Not re-reviewed:** `a3170ff`, `586416f` and `014855b` are not pushed
+      (`origin` reads `1f7e664`), and no reviewer has read them.
+    - **`privacy-security-reviewer`'s notes on `1f7e664`.** N3: package-level
+      settings files are guarded by a test, not an owner (this decision's
+      choice); their reach is turbo's `typecheck`, the only turbo task, and an
+      unowned `apps/server/tsconfig.json` can already make typecheck pass over
+      an error (the reviewer's statement; not reproduced by us), so they add
+      no new reach. An install script could write those files after the walk
+      test's checkout; with the named list, only an owned package's script
+      could. N1: the reviewer's token read `bypass_actors` as null, so who can
+      bypass the rules is unverified there; `gate:integrity`'s 5 of 5
+      remains the check. `code-reviewer` passed `1f7e664` with no should-fix,
+      and `test-auditor` passed it.
   - **Not verified here:**
     - the reviewer's full combined attack (a shell the pull request chooses,
       through every required check, to a merge): each half was shown, but the
