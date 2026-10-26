@@ -196,10 +196,13 @@ answered: should `/pnpm-workspace.yaml` and `/pnpm-lock.yaml` have a code owner?
 `OWNER_APPROVAL_PATHS` (read 2026-10-26). pnpm 10.33.0 reads `auditConfig` from the
 workspace file and that list replaces `package.json`'s (tried in a scratch copy,
 2026-10-26), so an ignore there could silence the required `security` check
-(`privacy-security-reviewer`, on #104). Today `scripts/dependency-audit.test.mjs`
-already fails if that file names `auditConfig` or its kin, and `scripts/` is
-code-owned, so that route needs an owner-approved test edit; every other change to
-the two files has no owner (overrides: BUG-25). Claude recommends the owner for
+(`privacy-security-reviewer`, on #104). **That route is open today:**
+`scripts/dependency-audit.test.mjs` matches the file's raw text, but pnpm decodes
+YAML escapes, so `"audit\u0043onfig": {"ignore\u0047hsas": [...]}` passes the test
+and `pnpm audit` exits 0 with the ignores applied (control: exit 1). Found by
+`privacy-security-reviewer` on #105 and reproduced on 2026-10-26; BUG-65 makes the
+test read the file as pnpm does. Every other change to the two files has no owner
+either (overrides: BUG-25). Claude recommends the owner for
 both, in a separate small pull request like #98 and #100 (CODEOWNERS plus
 `OWNER_APPROVAL_PATHS`). The detail is in `progress/m3.md`, 2026-10-26.
 
@@ -463,7 +466,7 @@ The things that still bite, and cost a session hours the first time.
   is [`progress/m2.md`](progress/m2.md) and M1's is
   [`progress/m1.md`](progress/m1.md), so a bug's next `BUG-<n>` has to be looked
   for in all four files, in this one and in `decisions.md`. The next one is
-  **BUG-65** (BUG-13 to BUG-64 are taken). The last paragraph of
+  **BUG-66** (BUG-13 to BUG-65 are taken). The last paragraph of
   `progress/m1.md` says why.
 - **gitleaks scans the pull request's whole history, not only its tree.** A
   credential-shaped literal stays a finding after the commit that removes it
@@ -552,11 +555,20 @@ The things that still bite, and cost a session hours the first time.
 
 ## In flight
 
-**No task is in flight.** BUG-64 is done ([#104](https://github.com/bvst/TryggHverdag/pull/104),
-`35a3290`, 2026-10-26; the row is in the M3 table), and task 3 is next in D-134's
-order. The next free IDs are **BUG-65** and **D-144** (checked 2026-10-26: neither
-is used anywhere else in the repository, on a branch name or in a pull request
-title, and the two open pull requests are Dependabot's).
+**BUG-65, in #105 with this record.** `scripts/dependency-audit.test.mjs`'s check that
+nothing but the root `package.json` sets pnpm's audit settings reads
+`pnpm-workspace.yaml` as raw text, but pnpm decodes YAML escapes:
+`"audit\u0043onfig": {"ignore\u0047hsas": [...]}` in that file passes the check, and
+`pnpm audit --audit-level high` exits 0 with the ignores applied (the control, with
+no ignore anywhere, exits 1). `pnpm-workspace.yaml` has no code owner, so a pull
+request touching only it could silence the required `security` check without the
+owner. Found by `privacy-security-reviewer` on #105; reproduced by the coordinating
+session on 2026-10-26 in a scratch copy. The fix: the check reads the file as pnpm
+does. The code-owner question below stands, and is more urgent.
+
+BUG-64 is done ([#104](https://github.com/bvst/TryggHverdag/pull/104), `35a3290`,
+2026-10-26; the row is in the M3 table), and task 3 is next in D-134's order. The
+next free IDs are **BUG-66** and **D-144**.
 
 **Follow-ups, queued and not done.** Task 2
 ([#101](https://github.com/bvst/TryggHverdag/pull/101), `05bfb73`, 2026-10-25), from
