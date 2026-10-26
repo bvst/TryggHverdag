@@ -670,6 +670,15 @@ function rcRoutes(text) {
 }
 
 /**
+ * BUG-66 (red): the names in the root .npmrc that are outside the settings it
+ * may hold. Nothing limits them today: BUG-11 and BUG-65 read only `ROUTE`'s
+ * words, so every other name, `registry` among them, is let through.
+ */
+function rcUnlisted(text) {
+  return rcNames(text).filter(() => false);
+}
+
+/**
  * BUG-65: what in a workflow could set an audit setting or load a hook. Each
  * line as written, outside a whole-line comment: BUG-11's check, kept. Then
  * each line of each scalar as GitHub decodes it, a whole-line comment again
@@ -2481,6 +2490,22 @@ packages:
     });
     expect(workflowRoutes('bad.yml', 'jobs:\n  security: {runs-on: ubuntu-latest\n')).toEqual([
       expect.stringMatching(/^bad\.yml is not read as clean: /),
+    ]);
+  });
+
+  test('BUG-66: a root .npmrc that points the registry elsewhere is refused', () => {
+    // Today's .npmrc with a registry line. pnpm sends the audit to the
+    // registry it names: a server that answered every request with no
+    // advisories made `pnpm audit --audit-level high` exit 0, "No known
+    // vulnerabilities found", where the unchanged file exits 1, "2 high"
+    // (2026-10-26).
+    const text = 'engine-strict=true\nregistry=http://127.0.0.1:48731/\n';
+    expect(
+      { text: ROUTE.test(text), bug65: rcRoutes(text) },
+      "the fixture passes today's checks: BUG-11's text check and BUG-65's decoded names",
+    ).toEqual({ text: false, bug65: [] });
+    expect(rcUnlisted(text)).toEqual([
+      '.npmrc sets "registry", which is not among the settings it may hold (engine-strict): adding one is a change to this test, and scripts/ is code-owned, so the owner approves it',
     ]);
   });
 
