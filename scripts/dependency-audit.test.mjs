@@ -853,6 +853,18 @@ catalog:
 "audit\u0043onfig": {"ignore\u0047hsas": ["GHSA-86w9-cpqp-85rv", "GHSA-vfj7-8cjw-p6xm", "GHSA-mrhx-c7xc-m3w5"]}
 `;
 
+/**
+ * Every character of a word as a backslash escape: `\`, the letter, and the
+ * character's code point in hex, padded to `digits`. The default, `\u` with
+ * four digits, is the form both JSON and YAML decode; YAML also decodes `\x`
+ * with two digits and `\U` with eight.
+ */
+function asEscapes(word, letter = 'u', digits = 4) {
+  return [...word]
+    .map((c) => `\\${letter}${c.codePointAt(0).toString(16).padStart(digits, '0')}`)
+    .join('');
+}
+
 // --- The lockfile ------------------------------------------------------------
 
 /** The fields of an importer or a snapshot that name what it depends on. */
@@ -2393,11 +2405,10 @@ describe('the dependency audit ignores what the owner accepted, and nothing else
     // Each route word, kebab and snake forms included, with every character
     // written as each of YAML's three escapes for one. The text check sees
     // none of them.
-    const hex = (character, digits) => character.codePointAt(0).toString(16).padStart(digits, '0');
     const escapes = [
-      ['x', (c) => `\\x${hex(c, 2)}`],
-      ['u', (c) => `\\u${hex(c, 4)}`],
-      ['U', (c) => `\\U${hex(c, 8)}`],
+      ['x', 2],
+      ['u', 4],
+      ['U', 8],
     ];
     const words = [
       'pnpmfile',
@@ -2416,8 +2427,8 @@ describe('the dependency audit ignores what the owner accepted, and nothing else
       'config_dependencies',
     ];
     for (const word of words) {
-      for (const [form, escape] of escapes) {
-        const text = `packages:\n  - apps/*\n"${[...word].map(escape).join('')}": x\n`;
+      for (const [form, digits] of escapes) {
+        const text = `packages:\n  - apps/*\n"${asEscapes(word, form, digits)}": x\n`;
         expect(ROUTE.test(text), `${word}, each character as \\${form}: the text names it`).toBe(
           false,
         );
@@ -2527,8 +2538,6 @@ packages:
   });
 
   test("BUG-65: the .npmrc check reads names as pnpm's ini parser does, refuses a hook setting however its name is written, and passes today's file", () => {
-    const jsonEscaped = (word) =>
-      [...word].map((c) => `\\u${c.codePointAt(0).toString(16).padStart(4, '0')}`).join('');
     // The names, as ini 1.3.8 reads them: comment lines skipped, a section's
     // name, a quoted name JSON-decoded, one in single quotes that is not JSON
     // left as it is, an unquoted one cut at `;` and unescaped.
@@ -2537,8 +2546,8 @@ packages:
       '; skipped=1',
       '# skipped=2',
       '[section]',
-      `"${jsonEscaped('quoted')}"=3`,
-      `'"${jsonEscaped('wrapped')}"'=4`,
+      `"${asEscapes('quoted')}"=3`,
+      `'"${asEscapes('wrapped')}"'=4`,
       "'not json'=5",
       'plain;comment=6',
       'esc\\;aped=7',
@@ -2571,14 +2580,14 @@ packages:
       '.npmrc: "global-pnpmfile", decoded, names pnpmfile',
     ]);
     // Every character escaped, as a setting and as a section.
-    expect(rcRoutes(`"${jsonEscaped('global-pnpmfile')}"=hooks.cjs\n`)).toEqual([
+    expect(rcRoutes(`"${asEscapes('global-pnpmfile')}"=hooks.cjs\n`)).toEqual([
       '.npmrc: "global-pnpmfile", decoded, names pnpmfile',
     ]);
-    expect(rcRoutes(`["${jsonEscaped('pnpmfile')}"]\nx=1\n`)).toEqual([
+    expect(rcRoutes(`["${asEscapes('pnpmfile')}"]\nx=1\n`)).toEqual([
       '.npmrc: "pnpmfile", decoded, names pnpmfile',
     ]);
     // JSON first, then the environment: an escaped `$` still comes out as `${`.
-    expect(rcRoutes(`"pnpm${jsonEscaped('$')}{TRYGG_UNSET-f}ile"=hooks.cjs\n`)).toEqual([
+    expect(rcRoutes(`"pnpm${asEscapes('$')}{TRYGG_UNSET-f}ile"=hooks.cjs\n`)).toEqual([
       '.npmrc: the key "pnpm${TRYGG_UNSET-f}ile" is filled in from the environment before pnpm reads it',
     ]);
     // A comment line: only the text check sees it, as BUG-11's always has.
@@ -2650,9 +2659,6 @@ packages:
   test("BUG-66: the .npmrc allowlist refuses every other setting, a section and a quoted or escaped name included, and passes engine-strict as pnpm's ini parser reads it", () => {
     const unlisted = (name) =>
       `.npmrc sets ${JSON.stringify(name)}, which is not among the settings it may hold (engine-strict): adding one is a change to this test, and scripts/ is code-owned, so the owner approves it`;
-    const jsonEscaped = (word) =>
-      [...word].map((c) => `\\u${c.codePointAt(0).toString(16).padStart(4, '0')}`).join('');
-
     // engine-strict, however ini reads it; no file; and comments, which set
     // nothing.
     for (const text of [
@@ -2673,8 +2679,8 @@ packages:
       '@trygghverdag:registry=http://127.0.0.1:48731/': '@trygghverdag:registry',
       '//registry.npmjs.org/:_authToken=${NPM_TOKEN}': '//registry.npmjs.org/:_authToken',
       'registry[]=http://127.0.0.1:48731/': 'registry[]',
-      [`"${jsonEscaped('registry')}"=http://127.0.0.1:48731/`]: 'registry',
-      [`'"${jsonEscaped('registry')}"'=http://127.0.0.1:48731/`]: 'registry',
+      [`"${asEscapes('registry')}"=http://127.0.0.1:48731/`]: 'registry',
+      [`'"${asEscapes('registry')}"'=http://127.0.0.1:48731/`]: 'registry',
       "'registry'=http://127.0.0.1:48731/": 'registry',
       'proxy=http://127.0.0.1:48732/': 'proxy',
       'https-proxy=http://127.0.0.1:48732/': 'https-proxy',
@@ -2694,7 +2700,7 @@ packages:
     // A section is a name too, and refused; the allowed name inside it is not.
     expect(rcUnlisted('[registry]\nengine-strict=true\n')).toEqual([unlisted('registry')]);
     // An escaped `registry` passes BUG-65's checks: only the allowlist sees it.
-    const escaped = `engine-strict=true\n"${jsonEscaped('registry')}"=http://127.0.0.1:48731/\n`;
+    const escaped = `engine-strict=true\n"${asEscapes('registry')}"=http://127.0.0.1:48731/\n`;
     expect(rcRoutes(escaped)).toEqual([]);
     expect(rcUnlisted(escaped)).toEqual([unlisted('registry')]);
   });
