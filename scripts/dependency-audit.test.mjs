@@ -702,6 +702,16 @@ function workspaceUnlisted(text) {
 }
 
 /**
+ * BUG-67 (red): the line shapes pnpm-workspace.yaml may hold, read without a
+ * YAML parser. Nothing limits them today: every check reads the file through
+ * `yaml`, so a line that `yaml` and pnpm's reader split differently is let
+ * through.
+ */
+function workspaceLines(text) {
+  return text.split('\n').filter(() => false);
+}
+
+/**
  * `ini` 1.3.8's `unsafe`, through which it reads a name. A name in double
  * quotes, or in single quotes around a JSON string, is `JSON.parse`d, so a
  * `\u` escape in it is decoded; one that does not parse loses only its single
@@ -2813,6 +2823,114 @@ packages:
     expect(workspaceUnlisted('- apps/*\n')).toEqual([
       "pnpm-workspace.yaml's top level is not a mapping of settings",
     ]);
+  });
+
+  test('BUG-67: a lone CR in pnpm-workspace.yaml hides a registries key from the YAML reader, but not from pnpm', () => {
+    // #105's privacy-security-reviewer, at e57543d. pnpm 10.33.0's reader,
+    // `@zkochan/js-yaml` 0.0.11, breaks the line at a CR with no LF after it,
+    // as the YAML spec does, and reads `registries` as a top-level key:
+    // `pnpm audit --audit-level high` exited 0 against a registry reporting
+    // no advisories (2026-10-26). `yaml` 2.9.1 keeps the CR inside a plain
+    // scalar, with no error or warning.
+    const text = [
+      'packages:',
+      '  - apps/*',
+      '  - packages/*\rregistries: {default: "http://127.0.0.1:48731/"}',
+      '',
+      'catalog:',
+      '  typescript: ~6.0.3',
+      '  vitest: ^5.0.1',
+      '  zod: ^4.6.6',
+      "  '@types/node': ^22.19.4",
+      '',
+    ].join('\n');
+    expect(
+      { text: ROUTE.test(text), topLevel: decodedYaml('pnpm-workspace.yaml', text).topLevel },
+      'the fixture is the bypass: the YAML reader sees only packages and catalog',
+    ).toEqual({ text: false, topLevel: ['packages', 'catalog'] });
+    const crLine =
+      "pnpm-workspace.yaml line 3 has a carriage return that is not part of a CRLF line end: the YAML spec, and pnpm's reader, break the line there, and this reader does not";
+    expect({
+      routes: workspaceRoutes(text),
+      unlisted: workspaceUnlisted(text),
+      lines: workspaceLines(text),
+    }).toEqual({
+      routes: [crLine],
+      unlisted: [crLine],
+      lines: [
+        'pnpm-workspace.yaml line 3, "  - packages/*\\rregistries: {default: \\"http://127.0.0.1:48731/\\"}", is not a line this file may hold: adding a line shape is a change to this test, and scripts/ is code-owned, so the owner approves it',
+      ],
+    });
+  });
+
+  test('BUG-67: a lone CR in a workflow is refused: the YAML spec breaks the line there, and this reader does not', () => {
+    // `yaml` reads one key, "echo ok\rrun"; a reader that breaks at the CR
+    // reads a different workflow. Not shown to change a GitHub run; refused
+    // because the two readings differ.
+    const text =
+      'jobs:\n  security:\n    steps:\n      - echo ok\rrun: pnpm config set registry http://127.0.0.1:48731/\n      - run: pnpm audit --audit-level high\n';
+    expect(workflowRoutes('cr.yml', text)).toEqual([
+      "cr.yml line 4 has a carriage return that is not part of a CRLF line end: the YAML spec, and pnpm's reader, break the line there, and this reader does not",
+    ]);
+  });
+
+  test("BUG-67: the line grammar refuses every line shape but those today's file uses, without a YAML parser", () => {
+    // A copy of today's file with one more package glob and one more catalog
+    // entry: the shapes it already uses.
+    const grown = [
+      '# A comment.',
+      'packages:',
+      '  - apps/*',
+      '  - packages/*',
+      '  - tools/*',
+      '',
+      'catalog:',
+      '  typescript: ~6.0.3',
+      '  vitest: ^5.0.1',
+      '  zod: ^4.6.6',
+      "  '@types/node': ^22.19.4",
+      '  fast-check: ^4.10.2',
+      '',
+    ].join('\n');
+    expect(workspaceLines(grown)).toEqual([]);
+
+    const today = 'packages:\n  - apps/*\n  - packages/*\ncatalog:\n  zod: ^4.6.6\n';
+    const breakIn = (code) => `packages:\n  - apps/*${String.fromCharCode(code)}registries: x\n`;
+    const refused = {
+      'a lone CR': 'packages:\n  - apps/*\rregistries: {default: x}\ncatalog:\n  zod: ^4.6.6\n',
+      'a CRLF copy': today.replace(/\n/g, '\r\n'),
+      'a flow mapping': '{packages: [apps/*], catalog: {zod: ^4.6.6}}\n',
+      'a double-quoted key': 'packages:\n  - apps/*\n"catalog":\n  zod: ^4.6.6\n',
+      'an escaped key': String.raw`packages:
+  - apps/*
+"\x72egistries":
+  default: http://127.0.0.1:48731/
+`,
+      'an anchor and an alias': 'packages:\n  - &glob apps/*\n  - *glob\n',
+      'a tag': 'packages:\n  - !!str apps/*\n',
+      'a << merge': 'packages:\n  - apps/*\n<<: {registries: {default: x}}\n',
+      'a registries line': `${today}registries:\n  default: http://127.0.0.1:48731/\n`,
+      'a top-level overrides': `${today}overrides:\n  zod: ^4.6.6\n`,
+      'a tab-indented line': 'packages:\n\t- apps/*\n',
+      'an inline comment after a value': 'catalog:\n  zod: ^4.6.6 # pinned\n',
+      'a NEL': breakIn(0x85),
+      'an LS': breakIn(0x2028),
+      'a PS': breakIn(0x2029),
+      // YAML reads these first characters as a tag, an alias and a folded
+      // scalar, which is why a glob or a range may not start with them.
+      'a glob that starts with !': 'packages:\n  - !apps/*\n',
+      'a glob that starts with *': 'packages:\n  - */apps\n',
+      'a range that starts with >': 'catalog:\n  zod: >=4.6.6\n',
+      'packages: twice': `${today}packages:\n  - tools/*\n`,
+      'a catalog entry under packages': 'packages:\n  - apps/*\n  zod: ^4.6.6\n',
+    };
+    // One assertion, so a failure names every fixture let through.
+    expect(
+      Object.entries(refused)
+        .filter(([, text]) => workspaceLines(text).length === 0)
+        .map(([name]) => name),
+      'let through by the line grammar',
+    ).toEqual([]);
   });
 
   test("BUG-11: D-093's premise holds in the lockfile: node-forge comes only through Expo's command-line tool, at a version the advisory covers", () => {
