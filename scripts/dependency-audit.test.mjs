@@ -92,6 +92,19 @@
  * check kept as a belt. A workflow, which GitHub reads as YAML, is read
  * decoded as well, for the same words and for the audit command.
  *
+ * BUG-66 is a setting none of those words names: `registry`. pnpm sends the
+ * audit to the registry the root .npmrc names, and CI's `security` job
+ * installs and audits with it. On 2026-10-26, in a scratch copy of #105's
+ * head, a local server that answered every request with no advisories, and
+ * `registry=http://127.0.0.1:48731/` added to the .npmrc, made
+ * `pnpm audit --audit-level high` exit 0, "No known vulnerabilities found";
+ * the unchanged file exits 1. A registry that serves the real packages and
+ * reports no advisories would pass the install as well. So the root .npmrc
+ * may hold only the settings in `RC_SETTINGS`, today `engine-strict`, and
+ * any other name fails, read as pnpm's `ini` reads it. A proxy, `strict-ssl`
+ * or a certificate setting was not tried, and is refused by the list either
+ * way.
+ *
  * An ignore list is a quiet way to stop a gate from seeing anything, so these
  * tests read files instead of running the audit: a `pnpm audit` run reads the
  * registry's advisory data, which changes whenever an advisory is published, and
@@ -131,6 +144,10 @@
  *     those words or runs an audit other than `pnpm audit --audit-level high`.
  *     A folded `run: >` is decoded too, so `pnpm` and `audit` on lines of
  *     their own are read as one command;
+ *   - BUG-66's allowlist: every name in the root .npmrc, as `ini` decodes it,
+ *     a `[section]`'s and the names inside it included, is in `RC_SETTINGS`
+ *     (today only `engine-strict`). Adding a setting is a change to this test,
+ *     in code-owned scripts/;
  *   - D-093's premise, read from pnpm-lock.yaml (lockfile v9): the packages
  *     that depend on `node-forge` are exactly `@expo/cli` and
  *     `@expo/code-signing-certificates`, the second's only dependent is
@@ -206,6 +223,11 @@
  *     bundled into pnpm and cannot be loaded; the two differences found, a
  *     `<<` merge and an unknown tag, are read where written or refused (see
  *     `yamlLibrary`);
+ *   - a `registry` key in pnpm-workspace.yaml: not honoured by pnpm 10.33.0
+ *     (tried 2026-10-26: the audit still reported the real advisories), and
+ *     D-144 gives that file a code owner. The same was true of a `registry`
+ *     line in apps/mobile/.npmrc. The workspace file is read here for
+ *     BUG-65's words only, and an .npmrc in a workspace package not at all;
  *   - pnpm settings outside the repository (a runner's own user or global
  *     config);
  *   - the spike's own lockfile, spikes/background-safety/app/pnpm-lock.yaml,
@@ -670,12 +692,27 @@ function rcRoutes(text) {
 }
 
 /**
- * BUG-66 (red): the names in the root .npmrc that are outside the settings it
- * may hold. Nothing limits them today: BUG-11 and BUG-65 read only `ROUTE`'s
- * words, so every other name, `registry` among them, is let through.
+ * BUG-66: the only settings the root .npmrc may hold. pnpm sends the audit to
+ * the registry this file names, so a `registry` line pointing at a server that
+ * reports no advisories passes the audit. Every other setting is refused
+ * too, whether or not it was ever shown to change the audit: a scoped
+ * registry, an auth line, a proxy, a certificate, a `[section]`. The list
+ * stays short on purpose.
+ */
+const RC_SETTINGS = new Set(['engine-strict']);
+
+/**
+ * BUG-66: each name in the root .npmrc outside `RC_SETTINGS`, as a finding.
+ * Every name `rcNames` decodes counts, a section's name and the names inside
+ * it included, so a quoted or escaped `registry` counts as `registry`.
  */
 function rcUnlisted(text) {
-  return rcNames(text).filter(() => false);
+  return rcNames(text)
+    .filter((name) => !RC_SETTINGS.has(name))
+    .map(
+      (name) =>
+        `.npmrc sets ${JSON.stringify(name)}, which is not among the settings it may hold (${[...RC_SETTINGS].join(', ')}): adding one is a change to this test, and scripts/ is code-owned, so the owner approves it`,
+    );
 }
 
 /**
@@ -2507,6 +2544,59 @@ packages:
     expect(rcUnlisted(text)).toEqual([
       '.npmrc sets "registry", which is not among the settings it may hold (engine-strict): adding one is a change to this test, and scripts/ is code-owned, so the owner approves it',
     ]);
+  });
+
+  test('BUG-66: the root .npmrc holds only the settings it may (RC_SETTINGS)', () => {
+    expect(
+      rcUnlisted(existsSync(path.join(root, '.npmrc')) ? read('.npmrc') : ''),
+      'the root .npmrc holds a setting outside RC_SETTINGS: pnpm reads it for the install and the audit, and a registry it names decides what the audit reports',
+    ).toEqual([]);
+  });
+
+  test("BUG-66: the .npmrc allowlist refuses every other setting, a section and a quoted or escaped name included, and passes engine-strict as pnpm's ini parser reads it", () => {
+    const unlisted = (name) =>
+      `.npmrc sets ${JSON.stringify(name)}, which is not among the settings it may hold (engine-strict): adding one is a change to this test, and scripts/ is code-owned, so the owner approves it`;
+    const jsonEscaped = (word) =>
+      [...word].map((c) => `\\u${c.codePointAt(0).toString(16).padStart(4, '0')}`).join('');
+
+    // engine-strict, however ini reads it; no file; and comments, which set
+    // nothing.
+    for (const text of [
+      'engine-strict=true\n',
+      'engine-strict = true\r\n',
+      '',
+      '; registry=http://127.0.0.1:48731/\n# registry=http://127.0.0.1:48731/\nengine-strict=true\n',
+    ]) {
+      expect(rcUnlisted(text), JSON.stringify(text)).toEqual([]);
+    }
+
+    // Each refused, by the name ini decodes; `registry[]`, which ini reads as
+    // a list named `registry`, by its name as written. Only `registry` was
+    // shown to change the audit; the rest are refused because they are not on
+    // the list.
+    const refused = {
+      'registry=http://127.0.0.1:48731/': 'registry',
+      '@trygghverdag:registry=http://127.0.0.1:48731/': '@trygghverdag:registry',
+      '//registry.npmjs.org/:_authToken=${NPM_TOKEN}': '//registry.npmjs.org/:_authToken',
+      'registry[]=http://127.0.0.1:48731/': 'registry[]',
+      [`"${jsonEscaped('registry')}"=http://127.0.0.1:48731/`]: 'registry',
+      [`'"${jsonEscaped('registry')}"'=http://127.0.0.1:48731/`]: 'registry',
+      "'registry'=http://127.0.0.1:48731/": 'registry',
+      'proxy=http://127.0.0.1:48732/': 'proxy',
+      'https-proxy=http://127.0.0.1:48732/': 'https-proxy',
+      'strict-ssl=false': 'strict-ssl',
+      'cafile=synthetic-ca.pem': 'cafile',
+      'noproxy=*': 'noproxy',
+    };
+    for (const [line, name] of Object.entries(refused)) {
+      expect(rcUnlisted(`engine-strict=true\n${line}\n`), line).toEqual([unlisted(name)]);
+    }
+    // A section is a name too, and refused; the allowed name inside it is not.
+    expect(rcUnlisted('[registry]\nengine-strict=true\n')).toEqual([unlisted('registry')]);
+    // An escaped `registry` passes BUG-65's checks: only the allowlist sees it.
+    const escaped = `engine-strict=true\n"${jsonEscaped('registry')}"=http://127.0.0.1:48731/\n`;
+    expect(rcRoutes(escaped)).toEqual([]);
+    expect(rcUnlisted(escaped)).toEqual([unlisted('registry')]);
   });
 
   test("BUG-11: D-093's premise holds in the lockfile: node-forge comes only through Expo's command-line tool, at a version the advisory covers", () => {
