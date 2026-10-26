@@ -111,6 +111,17 @@
 /.gitleaksignore                  @bvst @urso-agent
 /.gitleaks.toml                   @bvst @urso-agent
 /package.json                     @bvst @urso-agent
+# pnpm takes its settings and hooks from these, and every check runs through
+# pnpm: one line can silence the security check's audit (BUG-65 to BUG-67) or
+# make every `pnpm run` check pass having run nothing (BUG-69). The pnpmfile is
+# owned before it exists, as /.gitleaks.toml is. The two workspace package.json
+# files' install scripts run in CI before the audit (BUG-68). D-144.
+/pnpm-workspace.yaml              @bvst @urso-agent
+/pnpm-lock.yaml                   @bvst @urso-agent
+/.npmrc                           @bvst @urso-agent
+/.pnpmfile.cjs                    @bvst @urso-agent
+/apps/server/package.json         @bvst @urso-agent
+/packages/contracts/package.json  @bvst @urso-agent
 # Their include and exclude lists decide which tests CI runs at all, the gate
 # drills among them (D-082).
 /vitest.config.mjs                @bvst @urso-agent
