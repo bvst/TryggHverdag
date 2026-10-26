@@ -549,14 +549,6 @@ const yamlLibrary = (() => {
 })();
 
 /**
- * A scalar's value as text, as JavaScript writes it. `yaml` gives a `!!binary`
- * scalar as a Node Buffer, whose text is its bytes as UTF-8.
- */
-function scalarText(value) {
-  return String(value);
-}
-
-/**
  * The text of every scalar a key is made of: the key itself, the node an alias
  * names, or each item of a sequence used as a key (js-yaml turns `? [a]` into
  * the key `a`). A mapping used as a key gives none here: its own pairs are
@@ -567,7 +559,7 @@ function keyTexts(node, doc, seen = new Set()) {
   if (node === null || node === undefined || seen.has(node)) return [];
   seen.add(node);
   if (isAlias(node)) return keyTexts(node.resolve(doc), doc, seen);
-  if (isScalar(node)) return [scalarText(node.value)];
+  if (isScalar(node)) return [String(node.value)];
   if (isSeq(node)) return node.items.flatMap((item) => keyTexts(item, doc, seen));
   return [];
 }
@@ -592,7 +584,8 @@ function decodedYaml(file, text) {
     // Block bodies: a visitor that returns a number moves the walk to that index.
     visit(doc, {
       Scalar: (_, node) => {
-        scalars.push(scalarText(node.value));
+        // `yaml` gives `!!binary` as a Node Buffer, whose String is its bytes as UTF-8.
+        scalars.push(String(node.value));
       },
       Pair: (_, pair) => {
         keys.push(...keyTexts(pair.key, doc));
@@ -749,7 +742,7 @@ function rcNames(text) {
   const names = [];
   for (const line of text.split(/[\r\n]+/g)) {
     if (line === '' || /^\s*[;#]/.test(line)) continue;
-    const match = /^\[([^\]]*)\]$|^([^=]+)(=(.*))?$/i.exec(line);
+    const match = /^\[([^\]]*)\]$|^([^=]+)(=(.*))?$/.exec(line);
     if (match !== null) names.push(rcUnquoted(match[1] ?? match[2]));
   }
   return names;
