@@ -651,6 +651,22 @@ describe("this repository's own workflows", () => {
   /** The one D-144 path that is owned while absent: a root pnpmfile is refused, not kept. */
   const ABSENT_PNPMFILE = '/.pnpmfile.cjs';
 
+  // BUG-69 (D-144; test-auditor's S1 on #105): D144_FILES owns
+  // /.pnpmfile.cjs, the one pnpmfile pnpm 10 loads from the root by default.
+  // pnpm 11 looks for .pnpmfile.mjs first, by test-auditor's reading of pnpm
+  // 11.25.0's bundle (not run here), so a routine move to pnpm 11 would leave
+  // a root .pnpmfile.mjs with no owner. The pin holds because /package.json,
+  // where packageManager is written, is owned: the move itself needs the
+  // owner, and this failure tells them what to check first.
+  test("BUG-69: the root package.json's packageManager is pnpm 10, the major whose default pnpmfile, /.pnpmfile.cjs, D-144 owns", () => {
+    const { packageManager } = JSON.parse(readFileSync('package.json', 'utf8'));
+
+    expect(
+      packageManager,
+      'packageManager is not pnpm 10.x. Before moving to another major, check which pnpmfile names that version loads by default and give each one an owner (D-144): pnpm 11 reads /.pnpmfile.mjs, as reported from its bundle and not run here',
+    ).toMatch(/^pnpm@10\./);
+  });
+
   /**
    * The /apps/ owner paths the safety filter leaves out by name: D-102's,
    * D-139's and D-144's. One list, read by the filter test below, which pins

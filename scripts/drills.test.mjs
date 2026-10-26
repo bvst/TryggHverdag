@@ -1175,17 +1175,37 @@ const RUNNERS = {
   },
 };
 
-/** The workspace's packages, name → folder and scripts, from the root package.json's workspaces. */
+/**
+ * The workspace's packages, name → folder and scripts, from the root
+ * package.json's workspaces: a `folder/*` entry is each folder in it, and a
+ * plain folder is itself.
+ *
+ * RG-03 (BUG-69, D-144): this read every entry as `folder/*`, so a plain
+ * folder, which is how the workspace names its packages once a new folder
+ * under apps/ or packages/ may no longer join it unasked
+ * (privacy-security-reviewer's B1 on #105), was read as its subfolders and
+ * found no package. `folder/*` is read as before; it reads more entries, and
+ * no assertion changes.
+ */
 function workspacePackages(root) {
   const found = new Map();
   for (const glob of root.workspaces ?? []) {
-    const parent = glob.replace(/\/\*$/, '');
-    if (!existsSync(path.join(REPO, parent))) continue;
-    for (const entry of readdirSync(path.join(REPO, parent), { withFileTypes: true })) {
-      const manifest = path.join(REPO, parent, entry.name, 'package.json');
-      if (!entry.isDirectory() || !existsSync(manifest)) continue;
+    let folders;
+    if (glob.endsWith('/*')) {
+      const parent = glob.slice(0, -2);
+      folders = existsSync(path.join(REPO, parent))
+        ? readdirSync(path.join(REPO, parent), { withFileTypes: true })
+            .filter((entry) => entry.isDirectory())
+            .map((entry) => `${parent}/${entry.name}`)
+        : [];
+    } else {
+      folders = [glob.replace(/\/$/, '')];
+    }
+    for (const dir of folders) {
+      const manifest = path.join(REPO, dir, 'package.json');
+      if (!existsSync(manifest)) continue;
       const pkg = JSON.parse(readFileSync(manifest, 'utf8'));
-      found.set(pkg.name, { dir: `${parent}/${entry.name}`, scripts: pkg.scripts ?? {} });
+      found.set(pkg.name, { dir, scripts: pkg.scripts ?? {} });
     }
   }
   return found;

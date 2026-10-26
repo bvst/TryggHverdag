@@ -211,9 +211,9 @@
  *     `RC_SETTINGS` (and by the byte pin above);
  *   - BUG-69's package files: no .npmrc, pnpm-workspace.yaml or .pnpmfile.cjs
  *     anywhere in the repository, read by walking the tree with no git
- *     subprocess, `node_modules` and `.git` skipped, but the root's two and
- *     spikes/background-safety/app/pnpm-workspace.yaml, which is outside the
- *     root workspace (`PNPM_SETTINGS_ALLOWED`);
+ *     subprocess, `node_modules`, `.git` and `.stryker-tmp` skipped, but the
+ *     root's two and spikes/background-safety/app/pnpm-workspace.yaml, which
+ *     is outside the root workspace (`PNPM_SETTINGS_ALLOWED`);
  *   - D-093's premise, read from pnpm-lock.yaml (lockfile v9): the packages
  *     that depend on `node-forge` are exactly `@expo/cli` and
  *     `@expo/code-signing-certificates`, the second's only dependent is
@@ -995,8 +995,9 @@ const PNPM_SETTINGS_FILES = ['.npmrc', 'pnpm-workspace.yaml', '.pnpmfile.cjs'];
 /**
  * BUG-69: the only files of those names the repository may hold. The root's
  * two are pinned by the tests of them here, and code-owned (D-144). The
- * spike's is outside the root workspace (`apps/*`, `packages/*`), so pnpm and
- * turbo at the root never run a script there.
+ * spike's is outside the root workspace, whose packages are all folders
+ * under apps/ and packages/, so pnpm and turbo at the root never run a script
+ * there.
  */
 const PNPM_SETTINGS_ALLOWED = [
   '.npmrc',
@@ -1005,10 +1006,18 @@ const PNPM_SETTINGS_ALLOWED = [
 ];
 
 /**
+ * BUG-69: the folders the walk below does not enter: installed packages, git's
+ * own, and `.stryker-tmp`, the gitignored copy of the repository, root files
+ * and all, that an interrupted mutation run leaves behind (test-auditor's N3
+ * on #105).
+ */
+const WALK_SKIPS = ['node_modules', '.git', '.stryker-tmp'];
+
+/**
  * BUG-69: every file under the folder `top` named as one of
  * `PNPM_SETTINGS_FILES`, as a path from `top` with `/` between folders,
- * sorted. Folders named `node_modules` or `.git` are skipped, and a symbolic
- * link to a folder is not followed. The tree is read as it is, with no git
+ * sorted. Folders named as in `WALK_SKIPS` are skipped, and a symbolic link
+ * to a folder is not followed. The tree is read as it is, with no git
  * subprocess, so an untracked file is found too.
  */
 function pnpmSettingsFiles(top) {
@@ -1017,7 +1026,7 @@ function pnpmSettingsFiles(top) {
     for (const entry of readdirSync(path.join(top, dir), { withFileTypes: true })) {
       const at = dir === '' ? entry.name : `${dir}/${entry.name}`;
       if (entry.isDirectory()) {
-        if (entry.name !== 'node_modules' && entry.name !== '.git') walk(at);
+        if (!WALK_SKIPS.includes(entry.name)) walk(at);
       } else if (PNPM_SETTINGS_FILES.includes(entry.name)) {
         found.push(at);
       }
@@ -3388,7 +3397,7 @@ packages:
     ).toEqual([]);
   });
 
-  test('BUG-69: the walk finds each of those files in a package folder and deeper, skips node_modules and .git, and passes a tree with none', () => {
+  test('BUG-69: the walk finds each of those files in a package folder and deeper, skips node_modules, .git and .stryker-tmp, and passes a tree with none', () => {
     const top = mkdtempSync(path.join(tmpdir(), 'bug-69-'));
     const put = (file) => {
       mkdirSync(path.dirname(path.join(top, file)), { recursive: true });
@@ -3404,6 +3413,8 @@ packages:
       put('packages/contracts/src/deep/.pnpmfile.cjs');
       put('apps/server/node_modules/some-package/.npmrc');
       put('.git/hooks/.npmrc');
+      put('.stryker-tmp/sandbox-synthetic/.npmrc');
+      put('.stryker-tmp/sandbox-synthetic/apps/server/.npmrc');
       put('apps/server/.npmrc.bak');
       expect(pnpmSettingsFiles(top)).toEqual([
         'apps/server/.npmrc',
