@@ -71,12 +71,15 @@
     },
     "overrides": {
       "source-map-js@>=1.0.0 <1.2.2": "^1.2.2",
-      "shell-quote@<1.11.0": "^1.11.0"
+      "shell-quote@<1.11.0": "^1.11.0",
+      "zod@>=4.0.0 <4.6.6": "^4.6.6",
+      "undici@>=8.0.0 <8.12.2": "^8.12.2"
     },
     "auditConfig": {
       "ignoreGhsas": [
         "GHSA-86w9-cpqp-85rv",
-        "GHSA-vfj7-8cjw-p6xm"
+        "GHSA-vfj7-8cjw-p6xm",
+        "GHSA-mrhx-c7xc-m3w5"
       ]
     }
   }

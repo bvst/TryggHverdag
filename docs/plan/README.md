@@ -1,6 +1,6 @@
 # Planning hub — walk-home safety app (working title)
 
-**Last updated:** 2026-10-23 · **Phase:** ✅ Planning complete → ✅ **M0 closed** (2026-09-29, D-083) → ✅ **M1 closed** (2026-10-01, D-088) → ✅ **M2 closed** (2026-10-23, D-142): the core safety loop on the server, all nine tasks done (D-090, D-115), closed on window B of REL-10-AC19, the staging canary on time for 24 hours, with BUG-63 open → 🟡 **M3 started** (2026-10-20, D-134): GRP-01, task 1 of 12, is done (#96, squashed as `bd83b21` on 2026-10-21); task 2, the home screen (GRP-02, CALL-01, CALL-02), is built and through two review loops with every review passing (head `72ad66d`), and its pull request is to be opened: its specs are settled on the owner's answers (D-141), its step 1 was merged as #100 (`50214c0`, 2026-10-22), and [../progress.md](../progress.md) has where the rest stands
+**Last updated:** 2026-10-25 · **Phase:** ✅ Planning complete → ✅ **M0 closed** (2026-09-29, D-083) → ✅ **M1 closed** (2026-10-01, D-088) → ✅ **M2 closed** (2026-10-23, D-142): the core safety loop on the server, all nine tasks done (D-090, D-115), closed on window B of REL-10-AC19, the staging canary on time for 24 hours, with BUG-63 open → 🟡 **M3 started** (2026-10-20, D-134): tasks 1 and 2 of 12 are done: GRP-01 (#96, squashed as `bd83b21` on 2026-10-21) and the home screen (GRP-02, CALL-01, CALL-02; #101, squashed as `05bfb73` on 2026-10-25, its step 1 #100, `50214c0`); task 3, start a journey (JRN-01, JRN-02, LOST-01's phone half), is next in D-134's order and not started; BUG-64, the dependency audit red on `main` since #101 merged, is fixed first on the session branch (the owner's answer is D-143, 2026-10-25; red `8d437af`, green `e47dee5`; its pull request is to be opened), and [../progress.md](../progress.md) has where the rest stands
 
 **Current section:** milestone M3, started 2026-10-20 (D-134). **Milestone M2
 is closed** (2026-10-23, D-142). It started 2026-10-01 with SM-01; all nine
@@ -24,17 +24,22 @@ own data on staging (D-135). The task list is in [10-roadmap.md](10-roadmap.md).
 was squash-merged as `bd83b21` on 2026-10-21, after `urso-agent` approved it, and
 its `deploy-staging` (run 39557013621) passed. Step 1 was #94 (`60b46ee`); the
 owner's five answers are D-136, the delegated choices D-137 and the app's plain
-`fetch` client D-138; the record is [../progress/m3.md](../progress/m3.md). The
-next task is task 2 in D-134's order, the home screen (GRP-02, CALL-01, CALL-02).
-It is built and through two review loops, every review passing (head `72ad66d`
-on the session branch), and its pull request is to be opened. Its three specs
-are settled on the owner's answers (D-141, 2026-10-22), and its step 1, which
-makes four folders of `apps/mobile` (`src/features/call/`, `src/shared/ui/`,
-`src/app/` and `e2e/`) code-owner and safety-review paths, was merged by hand by the owner as #100
-(`50214c0`, 2026-10-22). The owner approves its pull request (D-042); the owner kept
-the 112 button's name on WCAG 2.5.3 (2026-10-23, in
-[../progress.md](../progress.md)). The owner's other part is A-36 (below): its plan
-and apply are done (2026-10-21), and the join in the app is left. The code-owner question from
+`fetch` client D-138; the record is [../progress/m3.md](../progress/m3.md).
+**GRP-02, CALL-01 and CALL-02, task 2, the home screen, is done:**
+[#101](https://github.com/bvst/TryggHverdag/pull/101) was squash-merged as `05bfb73`
+on 2026-10-25, after `urso-agent` approved it. Its three specs are settled on the
+owner's answers (D-141, 2026-10-22), and its step 1, which makes four folders of
+`apps/mobile` (`src/features/call/`, `src/shared/ui/`, `src/app/` and `e2e/`)
+code-owner and safety-review paths, was merged as #100 (`50214c0`, 2026-10-22). The
+owner kept the 112 button's name on WCAG 2.5.3 (2026-10-23). **`main`'s dependency
+audit has been red since #101 merged** (BUG-64): two high advisories, one in zod and
+one in undici, were published or changed in npm's data after #101's last green run. The owner answered
+on 2026-10-25 (D-143): fix what has a patch, and accept GHSA-mrhx-c7xc-m3w5 for
+Expo's tool's own zod only. BUG-64 is fixed on the session branch (red `8d437af`,
+green `e47dee5`), and its pull request is to be opened. The next task is task 3 in D-134's order, start a
+journey (JRN-01, JRN-02, LOST-01's phone half). The owner's other part is A-36
+(below): its plan and apply are done (2026-10-21), and the join in the app is left.
+The code-owner question from
 #96 (the owner's question 1) is answered, D-139: eleven sign-in files got a code
 owner in #98 (`a2457b5`, 2026-10-21).
 Bugs found and fixed since the last update (2026-10-10), with the pull request
@@ -179,9 +184,11 @@ what Claude needs from the owner is in [../progress.md](../progress.md).
 twelve tasks, one at a time, GRP-01 first. GRP-01 (sign-in and groups) is done:
 #96, squashed as `bd83b21` on 2026-10-21. Its record is
 [../progress/m3.md](../progress/m3.md); the owner's part is A-36: its plan and
-apply are done, and the join in the app is left. Task 2, the home screen, is built
-and through two review loops, and its pull request is to be opened (D-141; step 1
-is #100, `50214c0`): [../progress.md](../progress.md).
+apply are done, and the join in the app is left. Task 2, the home screen, is done
+too: #101, squashed as `05bfb73` on 2026-10-25 (D-141; step 1 was #100,
+`50214c0`). `main`'s dependency audit has been red since (BUG-64, fixed on the
+session branch, pull request to be opened; the owner's answer is D-143), and task 3, start a journey, is next:
+[../progress.md](../progress.md).
 
 **Open for M4** (not an owner action, so not in the to-do table below; it sits
 here so that M4's planning, which starts from this file and the roadmap's M4
