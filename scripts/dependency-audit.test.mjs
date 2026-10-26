@@ -281,7 +281,7 @@
  *   - a workspace package's `preinstall`, `install`, `postinstall` or
  *     `prepare`: CI's `pnpm install --frozen-lockfile` runs it before the
  *     audit, and it can rewrite .npmrc or the job's environment, which checks
- *     of the checked-in files cannot see. Queued as its own bug: install
+ *     of the checked-in files cannot see. Queued as BUG-68: install
  *     with `--ignore-scripts` in the `security` job, and check the workspace
  *     package.json files;
  *   - where `yaml` 2.9.1, the parser used here, and pnpm's read YAML
@@ -393,6 +393,20 @@ import { describe, expect, test } from 'vitest';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const read = (file) => readFileSync(path.join(root, file), 'utf8');
+
+/**
+ * The root .npmrc. A missing one is an error, never an empty file: read as
+ * empty, it passed every check of today's file here (test-auditor on #105
+ * renamed the path at each call, and all 44 tests still passed).
+ */
+const readRc = () => {
+  if (!existsSync(path.join(root, '.npmrc'))) {
+    throw new Error(
+      'the root .npmrc is missing: the tests of it here read the checked-in file, and a missing file is not a clean one',
+    );
+  }
+  return read('.npmrc');
+};
 
 /** The advisory the owner accepted on 2026-10-02 (D-093): node-forge's. */
 const ACCEPTED_ADVISORY = 'GHSA-86w9-cpqp-85rv';
@@ -2355,8 +2369,10 @@ describe('the dependency audit ignores what the owner accepted, and nothing else
       read('pnpm-workspace.yaml'),
       "pnpm-workspace.yaml mentions an audit or hook setting: its keys are assigned over package.json's, so auditConfig there replaces the decided one, and a pnpmfile or config dependency can rewrite it",
     ).not.toMatch(ROUTE);
+    // RG-03: read through readRc, which refuses a missing .npmrc, where this
+    // read a missing one as empty and passed (test-auditor on #105).
     expect(
-      existsSync(path.join(root, '.npmrc')) ? read('.npmrc') : '',
+      readRc(),
       'the root .npmrc mentions an audit or hook setting: a pnpmfile it names is loaded for the audit, and its updateConfig hook can set auditConfig',
     ).not.toMatch(ROUTE);
     expect(
@@ -2488,8 +2504,10 @@ describe('the dependency audit ignores what the owner accepted, and nothing else
       workspaceRoutes(workspace),
       "pnpm-workspace.yaml, read as pnpm reads it, sets an audit or hook setting: its keys are assigned over package.json's, so auditConfig there replaces the decided one, and a pnpmfile or config dependency can rewrite it",
     ).toEqual([]);
+    // RG-03: read through readRc, which refuses a missing .npmrc, where this
+    // read a missing one as empty and passed (test-auditor on #105).
     expect(
-      rcRoutes(existsSync(path.join(root, '.npmrc')) ? read('.npmrc') : ''),
+      rcRoutes(readRc()),
       'the root .npmrc, read as pnpm reads it, names a hook setting: a pnpmfile it names is loaded for the audit, and its updateConfig hook can set auditConfig',
     ).toEqual([]);
 
@@ -2692,7 +2710,9 @@ packages:
     ]);
 
     // No false positive: today's file, and other settings.
-    expect(rcRoutes(existsSync(path.join(root, '.npmrc')) ? read('.npmrc') : '')).toEqual([]);
+    // RG-03: read through readRc, which refuses a missing .npmrc, where this
+    // read a missing one as empty and passed (test-auditor on #105).
+    expect(rcRoutes(readRc())).toEqual([]);
     expect(
       rcRoutes('engine-strict=true\nauto-install-peers=true\nstrict-peer-dependencies=false\n'),
     ).toEqual([]);
@@ -2777,8 +2797,10 @@ packages:
   });
 
   test('BUG-66: the root .npmrc holds only the settings it may (RC_SETTINGS)', () => {
+    // RG-03: read through readRc, which refuses a missing .npmrc, where this
+    // read a missing one as empty and passed (test-auditor on #105).
     expect(
-      rcUnlisted(existsSync(path.join(root, '.npmrc')) ? read('.npmrc') : ''),
+      rcUnlisted(readRc()),
       'the root .npmrc holds a setting outside RC_SETTINGS: pnpm reads it for the install and the audit, and a registry it names decides what the audit reports',
     ).toEqual([]);
   });
@@ -3080,7 +3102,7 @@ packages:
 
   test('BUG-66, BUG-67: the root .npmrc is exactly `engine-strict=true`, compared byte for byte, with no parser to drift from pnpm', () => {
     expect(
-      existsSync(path.join(root, '.npmrc')) ? read('.npmrc') : '',
+      readRc(),
       'the root .npmrc is not exactly "engine-strict=true\\n": pnpm reads its settings for the install and the audit. Changing it is a change to this test, and scripts/ is code-owned, so the owner approves it',
     ).toBe('engine-strict=true\n');
   });
