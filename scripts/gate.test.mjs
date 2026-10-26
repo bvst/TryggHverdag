@@ -954,6 +954,92 @@ describe("this repository's own workflows", () => {
     }
   });
 
+  // BUG-69 (D-144): every CI check runs through `pnpm run`, the unit run that
+  // holds scripts/dependency-audit.test.mjs among them. pnpm 10.33.0 takes the
+  // shell it hands each script to from `scriptShell` in pnpm-workspace.yaml,
+  // `script-shell` in the root .npmrc, or a root .pnpmfile.cjs whose
+  // updateConfig hook sets it. One line in any of them, and every check goes
+  // green having run nothing (reproduced with pnpm 10.33.0, 2026-10-26: a
+  // script that exits 1 exited 0 and did not run). None of the three had a
+  // code owner, and the tests that refuse those lines are the ones the shell
+  // skips. pnpm-lock.yaml decides what the install fetches and what the audit
+  // reads. The two workspace package.json files had no owner, and their
+  // install scripts run in CI before the audit (BUG-68); /package.json and
+  // /apps/mobile/package.json were owned already. The owner decided all six
+  // on 2026-10-26 (D-144). Written as OWNER_APPROVAL_PATHS writes a path:
+  // from the root.
+  //
+  // /.pnpmfile.cjs does not exist, and must not: BUG-11's test in
+  // scripts/dependency-audit.test.mjs refuses any root file with "pnpmfile" in
+  // its name. It is owned before it exists, as SEC-06's /.gitleaks.toml is,
+  // because the pull request that adds one is the one to stop. Its hook can
+  // stop the very `pnpm run` that would run BUG-11's test.
+  const D144_FILES = [
+    '/pnpm-workspace.yaml',
+    '/pnpm-lock.yaml',
+    '/.npmrc',
+    '/.pnpmfile.cjs',
+    '/apps/server/package.json',
+    '/packages/contracts/package.json',
+  ];
+  /** The one D-144 path that is owned while absent: a root pnpmfile is refused, not kept. */
+  const ABSENT_PNPMFILE = '/.pnpmfile.cjs';
+
+  test('BUG-69: the files pnpm reads its settings and hooks from, and the two workspace package.json files without an owner, are paths the owner must approve (D-144)', () => {
+    const present = D144_FILES.filter((owned) => owned !== ABSENT_PNPMFILE);
+    const listed = spawnSync('git', ['ls-files', '--', ...present.map((owned) => owned.slice(1))], {
+      encoding: 'utf8',
+    });
+
+    expect(D144_FILES, 'the root pnpmfile is among the six').toContain(ABSENT_PNPMFILE);
+    // The five that exist: git tracks each as a file of its own, so a path
+    // misspelt alike here, in OWNER_APPROVAL_PATHS and in CODEOWNERS cannot
+    // pass as owned while the real file stays unowned.
+    expect(listed.status, listed.stderr).toBe(0);
+    expect(listed.stdout.split('\n').filter((file) => file !== '')).toEqual(
+      present.map((owned) => owned.slice(1)).toSorted(),
+    );
+    // The sixth is owned while absent, and stays absent: nothing on disk and
+    // nothing git tracks.
+    expect(
+      statSync(ABSENT_PNPMFILE.slice(1), { throwIfNoEntry: false }),
+      `${ABSENT_PNPMFILE} exists: BUG-11 refuses a root pnpmfile, which pnpm loads for every command`,
+    ).toBeUndefined();
+    expect(
+      spawnSync('git', ['ls-files', '--', ABSENT_PNPMFILE.slice(1)], { encoding: 'utf8' }).stdout,
+    ).toBe('');
+    expect(
+      D144_FILES.filter((owned) => !OWNER_APPROVAL_PATHS.includes(owned)),
+      'paths D-144 gives the owner that OWNER_APPROVAL_PATHS does not hold',
+    ).toEqual([]);
+  });
+
+  test("BUG-69: .github/CODEOWNERS gives each of them to the owner: each has one line of its own naming @bvst and @urso-agent, gate:integrity finds every owner-approval path owned, and under GitHub's last-match rule the line matching each names @bvst @urso-agent (D-144)", () => {
+    const text = readFileSync('.github/CODEOWNERS', 'utf8');
+    const rules = codeownersRules(text);
+    const ownersOf = lastMatchOwners(text);
+
+    expect(reviewCodeowners(text)).toEqual([]);
+    // The reading is checked on the root's own package.json first: owned by
+    // its own line, which must not be read as covering the workspace
+    // packages' package.json files below.
+    expect(ownersOf('package.json')).toEqual(OWNERS);
+    expect(
+      D144_FILES.map((owned) => [
+        owned,
+        rules.filter((rule) => rule.pattern === owned).map((rule) => rule.owners),
+      ]),
+      'the lines of .github/CODEOWNERS whose pattern is each path',
+    ).toEqual(D144_FILES.map((owned) => [owned, [OWNERS]]));
+    // A path that does not exist is matched like any other, so the absent
+    // pnpmfile is asked about too: a later ownerless line cannot undo any of
+    // the six.
+    expect(
+      D144_FILES.map((owned) => [owned, ownersOf(owned.slice(1))]),
+      'the owners the last line of .github/CODEOWNERS matching each path gives it',
+    ).toEqual(D144_FILES.map((owned) => [owned, OWNERS]));
+  });
+
   // BUG-10 (D-092, D-094, D-095): SM-01 put journey guarantees in files no
   // safety list named: the responder insert and its transaction, the index
   // that allows one unended journey per walker, the device-credential check,
