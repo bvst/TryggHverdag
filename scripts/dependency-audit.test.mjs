@@ -2609,6 +2609,16 @@ packages:
         'decoded: pnpm audit --audit-level high',
       ],
     });
+    // A shell comment after the command, inside a decoded value: only a
+    // line that starts with `#` is skipped, because this one still runs.
+    const inlineComment = String.raw`jobs:
+  security:
+    steps:
+      - run: "pnpm config set \x70npmfile hooks.cjs # sets the hook"
+`;
+    expect(workflowRoutes('inline.yml', inlineComment)).toEqual([
+      'inline.yml: "pnpm config set pnpmfile hooks.cjs # sets the hook", decoded, names pnpmfile',
+    ]);
     expect(workflowRoutes('bad.yml', 'jobs:\n  security: {runs-on: ubuntu-latest\n')).toEqual([
       expect.stringMatching(/^bad\.yml is not read as clean: /),
     ]);
@@ -2779,6 +2789,15 @@ packages:
         'defaults: &defaults\n  registries:\n    default: http://127.0.0.1:48731/\npackages:\n  - apps/*\n<<: *defaults\n',
       ),
     ).toEqual([unlisted('defaults'), unlisted('<<')]);
+
+    // The whole file written as one flow mapping: its keys are the top-level
+    // keys all the same.
+    expect(workspaceUnlisted('{packages: [apps/*], catalog: {zod: ^4.6.6}}\n')).toEqual([]);
+    expect(
+      workspaceUnlisted(
+        '{packages: [apps/*], catalog: {zod: ^4.6.6}, registries: {default: http://127.0.0.1:48731/}}\n',
+      ),
+    ).toEqual([unlisted('registries')]);
 
     // A file that does not parse is refused through BUG-65's `unread`, and a
     // top level that is not a mapping, which pnpm refuses too, here.
