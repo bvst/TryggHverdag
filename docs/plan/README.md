@@ -91,8 +91,9 @@ Claude secrets), so it is not only `main`'s reviewed code, and it gets the flag 
 first wait for the call button, with the phone awake and the app's package focused, and which screen the app showed is
 unknown. The fix is evidence, not a cause: a failed Maestro run prints its screen as translation keys and resource IDs
 (`scripts/lib/screen-dump.mjs`, `scripts/e2e-android.mjs`). It is written and reviewed on the session branch (red `182c8ad`,
-`dd2b182`, `51ced5d`; green `d88a877`, `749bfc9`; 155 of 155 tests pass in the four files; the in-session reviews of `d88a877`,
-`code-reviewer`, `privacy-security-reviewer` and `test-auditor`, all PASS) and goes in the pull request after #106, not opened
+`dd2b182`, `51ced5d`, `00049da`; green `d88a877`, `749bfc9`, `c50d5c6`; 160 of 160 tests pass in the four files; the in-session
+reviews of `d88a877`, `code-reviewer`, `privacy-security-reviewer` and `test-auditor`, and `safety-reviewer`'s of `b44a986`, all
+PASS) and goes in the pull request after #106, not opened
 yet: `gate:full` has not completed on this head. Whether uiautomator can read the screen right after Maestro exits on CI's
 emulator is not verified; the cause stays open until a failure prints its screen. **`deploy-staging` failed on
 `main` at `67492e5`** (run 40493742912, the "Deploy" step): the coordinating session read the job's log, and the git push of the
