@@ -547,6 +547,9 @@ describe('BUG-68: every pnpm install in ci.yml runs with --ignore-scripts', () =
       '      - run: |', // 47
       '          echo "build #1" && pnpm install --frozen-lockfile', // 48: refused, the `#` is quoted
       '          echo "#1" # && pnpm install', // 49: not a command, a comment after a quoted `#`
+      // test-auditor on #106, round 3: the single quote, and an escaped `"`.
+      "          echo 'build #1' && pnpm install --frozen-lockfile", // 50: refused
+      '          echo "a\\" #" && pnpm install --frozen-lockfile', // 51: refused, the quote is still open
       '',
     ].join('\n');
 
@@ -576,6 +579,8 @@ describe('BUG-68: every pnpm install in ci.yml runs with --ignore-scripts', () =
       'fixture.yml:44: pnpm install',
       'fixture.yml:45: pnpm install',
       'fixture.yml:48: pnpm install --frozen-lockfile',
+      'fixture.yml:50: pnpm install --frozen-lockfile',
+      'fixture.yml:51: pnpm install --frozen-lockfile',
     ]);
     expect(
       installs.filter((each) => each.ignoresScripts).map((each) => each.line),
@@ -584,15 +589,19 @@ describe('BUG-68: every pnpm install in ci.yml runs with --ignore-scripts', () =
     // The plain-text check (test-auditor on #106): exactly the lines that say
     // pnpm install or pnpm i on one line, outside a comment. Not the shell
     // comment on line 7; not 12, 16 or 17, which name no install right after
-    // pnpm; not 48, whose quoted `#` its cruder comment rule takes for one
-    // (the reading above finds it); not 49; and each one a line the decoded
-    // reading found.
+    // pnpm; not 48, 50 or 51, whose quoted `#` its cruder comment rule takes
+    // for one (the reading above finds each); not 49; and each one a line the
+    // decoded reading found.
     const plain = plainInstallLines(fixture);
     expect(plain).toEqual([
       4, 8, 10, 13, 14, 15, 18, 22, 23, 25, 28, 30, 31, 32, 33, 35, 36, 37, 38, 39, 40, 41, 42, 43,
       44, 45, 46,
     ]);
     expect(plain, 'the shell comment on line 7').not.toContain(7);
+    expect(
+      plain.filter((number) => [48, 50, 51].includes(number)),
+      'the lines with a quoted `#` before the install, which the plain pass drops',
+    ).toEqual([]);
     expect(plain.filter((number) => !installs.some((each) => each.line === number))).toEqual([]);
     expect(() => installsIn('broken.yml', 'jobs:\n  a: [\n')).toThrow(
       /broken\.yml is not read as clean/,
@@ -766,6 +775,18 @@ const FIVE = [
   'packages/test-kit',
 ];
 
+// The names INSTALL_LIFECYCLE holds, written out again, so a name dropped from it fails both fixtures.
+const EXPECTED_NAMES = [
+  'preinstall',
+  'install',
+  'postinstall',
+  'preprepare',
+  'prepare',
+  'postprepare',
+  'prepublish',
+  'prepublishOnly',
+];
+
 /** A copy of the root package.json, pnpm-workspace.yaml and each workspace package.json, in a fresh folder. */
 function copyOfManifests() {
   const dir = scratch();
@@ -812,22 +833,10 @@ describe('BUG-68: no package.json holds a script pnpm runs on install, but the r
       'apps/server/package.json: scripts.postinstall is "echo registry=http://127.0.0.1:9/ >> ../../.npmrc"',
     ]);
 
-    // Every name, one to a package in turn, and a binding.gyp in another. The
-    // names are written out again, not read from INSTALL_LIFECYCLE, so a name
-    // dropped from it fails here.
+    // Every name, one to a package in turn, and a binding.gyp in another.
     const every = copyOfManifests();
     const folders = workspaceFolders(every);
-    const names = [
-      'preinstall',
-      'install',
-      'postinstall',
-      'preprepare',
-      'prepare',
-      'postprepare',
-      'prepublish',
-      'prepublishOnly',
-    ];
-    const expected = names.map((name, index) => {
+    const expected = EXPECTED_NAMES.map((name, index) => {
       const folder = folders[index % folders.length] ?? '';
       addScript(every, folder, name, 'true');
       return { folder, finding: `${folder}/package.json: scripts.${name} is "true"` };
@@ -863,9 +872,7 @@ describe('BUG-68: no package.json holds a script pnpm runs on install, but the r
     // --ignore-scripts skips this prepare in CI, which is fine: it only points
     // git at .githooks, which no CI job uses.
     const { scripts } = manifestOf(ROOT, '.');
-    expect(scripts?.prepare, 'the root package.json’s prepare').toBe(
-      'git config core.hooksPath .githooks || true',
-    );
+    expect(scripts?.prepare, 'the root package.json’s prepare').toBe(ROOT_PREPARE);
     expect(
       rootFindings(ROOT),
       `install-time scripts in the root package.json, other than prepare as "${ROOT_PREPARE}": pnpm runs each on every install without --ignore-scripts (BUG-68). The names refused: ${[...INSTALL_LIFECYCLE, ...ROOT_INSTALL_HOOKS].join(', ')}`,
@@ -894,18 +901,9 @@ describe('BUG-68: no package.json holds a script pnpm runs on install, but the r
     writeFileSync(path.join(gyp, 'binding.gyp'), '{ "targets": [] }\n');
     expect(rootFindings(gyp)).toEqual(['binding.gyp: pnpm runs it as node-gyp rebuild']);
 
-    // Every other name pnpm runs on install, each refused at the root too,
-    // written out again as in the workspace check's copy.
+    // Every other name pnpm runs on install, each refused at the root too.
     const every = copyOfManifests();
-    const others = [
-      'preinstall',
-      'install',
-      'postinstall',
-      'preprepare',
-      'postprepare',
-      'prepublish',
-      'prepublishOnly',
-    ];
+    const others = EXPECTED_NAMES.filter((name) => name !== 'prepare');
     for (const name of others) addScript(every, '.', name, 'true');
     expect(rootFindings(every)).toEqual(
       others.map((name) => `package.json: scripts.${name} is "true"`),
