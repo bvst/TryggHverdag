@@ -3196,6 +3196,26 @@ const SCRIPT_ORDER = SCRIPTED_FLOWS.map(({ flow }) => flow);
 /** A line that says something could not be read. */
 const UNREAD = /\bunread\b|\bcould not be read\b|\bnot read\b/i;
 
+/** `text` as a pattern that matches it and nothing else. */
+const literally = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/**
+ * Whether `stdout` holds printEvidence's own line for `flow` naming `what`
+ * ("phone's wakefulness" or "focused window's package") as a value `value`
+ * matches, to the end of the line: `e2e:android: <flow> … The <what> then:
+ * <value>.` Added in BUG-70's round 5 (RG-03): the screen's lines name
+ * packages too, the launcher's among them, so a test of the evidence matches
+ * its line, not the value anywhere in the job log.
+ */
+const saysEvidence = (stdout, flow, what, value) =>
+  stdout
+    .split('\n')
+    .some((line) =>
+      new RegExp(`\\b${literally(flow)}\\b.*\\bThe ${literally(what)} then: ${value}\\.$`).test(
+        line,
+      ),
+    );
+
 /** A job-log line that says the end-call key was pressed. */
 const SAYS_END_CALL = /KEYCODE_ENDCALL|\bend[- ]?call key\b/i;
 
@@ -3446,7 +3466,7 @@ describe('CALL-01, approach 9 (PR #101’s first android-e2e): an awake, unlocke
   );
 
   test('CALL-01-AC2, CALL-01-AC3, CALL-01-AC4 and CALL-01-AC8: when a scripted flow fails, before the run stops the script reads and prints the phone’s wakefulness and the focused window’s package, and the failure stays the flow’s', async () => {
-    const { code, stderr, output, calls, invocations } = await runScripted({
+    const { code, stdout, stderr, output, calls, invocations } = await runScripted({
       effects: {
         'call-without-permission': { focus: 'launcher', wakefulness: 'Dozing', status: 'ERROR' },
       },
@@ -3458,8 +3478,23 @@ describe('CALL-01, approach 9 (PR #101’s first android-e2e): an awake, unlocke
     expect(run, output).toBeDefined();
     expect(run?.after.some(isPowerRead), output).toBe(true);
     expect(run?.after.some(isWindowRead), output).toBe(true);
-    expect(output).toContain('Dozing');
-    expect(output).toContain(LAUNCHER_PACKAGE);
+    // RG-03 (BUG-70, round 5): was toContain('Dozing') and
+    // toContain(LAUNCHER_PACKAGE) anywhere in the job log, which the screen's
+    // lines (the launcher's package among them) made vacuous; now the
+    // evidence's own lines, as on main only they could supply it.
+    expect(
+      saysEvidence(stdout, 'call-without-permission.yaml', "phone's wakefulness", 'Dozing'),
+      output,
+    ).toBe(true);
+    expect(
+      saysEvidence(
+        stdout,
+        'call-without-permission.yaml',
+        "focused window's package",
+        literally(LAUNCHER_PACKAGE),
+      ),
+      output,
+    ).toBe(true);
     expect(code, output).not.toBe(0);
     expect(code, 'it was killed rather than finishing').not.toBeNull();
     expect(stderr, output).toContain('call-without-permission');
@@ -3467,24 +3502,32 @@ describe('CALL-01, approach 9 (PR #101’s first android-e2e): an awake, unlocke
   });
 
   test('CALL-01-AC2, CALL-01-AC3, CALL-01-AC4 and CALL-01-AC8: when that evidence cannot be read, it is printed as unread, and the failure stays the flow’s', async () => {
-    const { code, stderr, output, calls, fontScaleAtEnd } = await runScripted({
+    const { code, stdout, stderr, output, calls, fontScaleAtEnd } = await runScripted({
       effects: {
         'call-without-permission': { focus: 'dialer', status: 'ERROR', breaksDumps: true },
       },
     });
-    const lines = output.split('\n');
     const failed = calls.findIndex(
       (call) => isFlowRun(call) && /\bcall-without-permission\.yaml\b/.test(call),
     );
 
+    // RG-03 (BUG-70, round 5): was any line with "wakeful", and any with
+    // window, package or focus, saying unread. Not vacuous at HEAD (no screen
+    // line has those words), but a screen-unread line could come to; now the
+    // evidence's own lines.
     expect(
-      lines.filter((line) => /wakeful/i.test(line) && UNREAD.test(line)),
+      saysEvidence(stdout, 'call-without-permission.yaml', "phone's wakefulness", 'unread\\b.*'),
       output,
-    ).not.toEqual([]);
+    ).toBe(true);
     expect(
-      lines.filter((line) => /\b(window|package|focus|focused)\b/i.test(line) && UNREAD.test(line)),
+      saysEvidence(
+        stdout,
+        'call-without-permission.yaml',
+        "focused window's package",
+        'unread\\b.*',
+      ),
       output,
-    ).not.toEqual([]);
+    ).toBe(true);
     expect(code, output).not.toBe(0);
     expect(code, 'it was killed rather than finishing').not.toBeNull();
     expect(stderr, output).toContain('call-without-permission');
@@ -3496,7 +3539,7 @@ describe('CALL-01, approach 9 (PR #101’s first android-e2e): an awake, unlocke
   });
 
   test('CALL-01-AC2, CALL-01-AC3, CALL-01-AC4, CALL-01-AC8 and PRIV-07: with numbers in full in Telecom’s record and the window dump, the evidence of a failed flow names the wakefulness and the package, and no number, nor six of its digits, appears in the job log', async () => {
-    const { code, output, telecomAtEnd, windowAtEnd } = await runScripted({
+    const { code, stdout, output, telecomAtEnd, windowAtEnd } = await runScripted({
       unmasked: true,
       effects: {
         'call-without-permission': { focus: 'numbered', wakefulness: 'Dozing', status: 'ERROR' },
@@ -3511,8 +3554,22 @@ describe('CALL-01, approach 9 (PR #101’s first android-e2e): an awake, unlocke
     expect(numberLeaks(output), output).toEqual([]);
     // Not vacuous: the evidence is there. The focused window has no package
     // of its own, so the package is the focused app's, the launcher's.
-    expect(output).toContain('Dozing');
-    expect(output).toContain(LAUNCHER_PACKAGE);
+    // RG-03 (BUG-70, round 5): was toContain('Dozing') and
+    // toContain(LAUNCHER_PACKAGE) anywhere in the job log, which the screen's
+    // lines made vacuous; now the evidence's own lines.
+    expect(
+      saysEvidence(stdout, 'call-without-permission.yaml', "phone's wakefulness", 'Dozing'),
+      output,
+    ).toBe(true);
+    expect(
+      saysEvidence(
+        stdout,
+        'call-without-permission.yaml',
+        "focused window's package",
+        literally(LAUNCHER_PACKAGE),
+      ),
+      output,
+    ).toBe(true);
     expect(code, output).not.toBe(0);
     expect(code, 'it was killed rather than finishing').not.toBeNull();
   });

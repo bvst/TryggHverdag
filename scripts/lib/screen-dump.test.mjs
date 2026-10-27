@@ -775,7 +775,10 @@ describe('BUG-70 and PRIV-07: readScreen prints no number and no name from the s
 // as `const NAME = '<literal>';` (exported or not), or imported by name from
 // one the app's source exports so. One built at run time, from a template, a
 // variable, a parameter, a property or a call, is refused, and so is a testID
-// set other than as a JSX attribute.
+// set other than as a JSX attribute. Round 5 (privacy-security-reviewer, on
+// CI): the .ts files are read too, so a testID set in one is checked; there
+// it can be no JSX attribute, so any is refused until this check is widened
+// on purpose.
 
 /** Where the app's source is. */
 const APP_SOURCE = new URL('../../apps/mobile/src/', import.meta.url);
@@ -897,6 +900,8 @@ describe('BUG-70 and PRIV-07: every resource-id the reader prints is a constant 
       "import { RENAMED } from './ids';\n<A testID={RENAMED} />",
       "let MUTABLE = 'row';\n<A testID={MUTABLE} />",
       '<A {...{ testID: name }} />',
+      // Round 5: as a .ts file would set one, in an object, even a literal.
+      "export const rowProps = { testID: 'trygghverdag-row' };",
     ];
     for (const source of refusals) {
       const ids = testIdsOf(source, exported);
@@ -906,10 +911,12 @@ describe('BUG-70 and PRIV-07: every resource-id the reader prints is a constant 
     }
   });
 
-  test('BUG-70 and PRIV-07: every testID in the app’s source (apps/mobile/src, its .tsx files, test files left out) is a string constant; today the call button’s and 112’s, as their files declare them', () => {
+  test('BUG-70 and PRIV-07: every testID in the app’s source (apps/mobile/src, its .tsx and .ts files, test files and .d.ts left out) is a string constant; today the call button’s and 112’s, as their files declare them', () => {
     const files = readdirSync(APP_SOURCE, { recursive: true })
       .map(String)
-      .filter((file) => file.endsWith('.tsx') && !file.endsWith('.test.tsx'));
+      .filter(
+        (file) => /\.tsx?$/.test(file) && !/\.test\.tsx?$/.test(file) && !file.endsWith('.d.ts'),
+      );
     const sources = (filter) =>
       readdirSync(APP_SOURCE, { recursive: true })
         .map(String)
@@ -929,6 +936,7 @@ describe('BUG-70 and PRIV-07: every resource-id the reader prints is a constant 
 
     // Not vacuous: the source was read, and the two testIDs the L7 flows use are found.
     expect(files).toContain('features/call/call-button.tsx');
+    expect(files).toContain('features/call/phone.ts');
     expect(ids).toEqual(
       expect.arrayContaining([
         { file: 'features/call/call-button.tsx', written: 'CALL_BUTTON_ID', value: CALL_ID },
