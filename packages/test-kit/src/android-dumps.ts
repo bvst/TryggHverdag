@@ -184,7 +184,7 @@ export function powerDump(wakefulness: string | null): string {
  * without printing what is on it (PRIV-07).
  *
  * The shape is AOSP's AccessibilityNodeInfoDumper's, cut down: one line, the
- * XML declaration, a <hierarchy rotation="…"> root, and a <node> per view, in
+ * XML declaration, a <hierarchy rotation="0"> root, and a <node> per view, in
  * the tree's order, each with the attributes that dumper writes, in its order;
  * a node with no children closed as ` />`, as Android's XML serializer (kxml)
  * closes an empty element. Every node has the same bounds here, which nothing
@@ -230,7 +230,7 @@ const ATTRIBUTE_ENTITIES: Readonly<Record<string, string>> = {
 };
 
 /** `value` as an attribute's value in the dump: &, <, > and " by name, a line break or a tab by its number. */
-export function xmlAttribute(value: string): string {
+function xmlAttribute(value: string): string {
   return value.replace(/[&<>"\n\r\t]/g, (character) => ATTRIBUTE_ENTITIES[character] ?? character);
 }
 
@@ -264,16 +264,13 @@ function nodeXml(node: UiNode, index: number, inherited: string): string {
 
 /**
  * The file `uiautomator dump` writes: these root views, each with its
- * children, every node without a package of its own in `pack`.
+ * children, every node without a package of its own in `pack`, the phone
+ * upright (rotation 0).
  */
-export function hierarchyDump(
-  pack: string,
-  roots: readonly UiNode[],
-  { rotation = 0 }: { rotation?: number } = {},
-): string {
+export function hierarchyDump(pack: string, roots: readonly UiNode[]): string {
   return [
     "<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>",
-    `<hierarchy rotation="${String(rotation)}">`,
+    '<hierarchy rotation="0">',
     ...roots.map((root, at) => nodeXml(root, at, pack)),
     '</hierarchy>',
   ].join('');

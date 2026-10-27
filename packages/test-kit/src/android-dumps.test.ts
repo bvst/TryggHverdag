@@ -21,7 +21,6 @@ import {
   telecomDump,
   textNode,
   windowDump,
-  xmlAttribute,
 } from './android-dumps.ts';
 
 const NUMBER = '+447700900318';
@@ -106,7 +105,7 @@ describe('the screen dump, as uiautomator writes it (BUG-70)', () => {
         ),
     );
 
-  test('one line: the XML declaration, a hierarchy root with its rotation, and the nodes in the tree’s order, a node with no children closed as " />"', () => {
+  test('one line: the XML declaration, a hierarchy root, the phone upright, and the nodes in the tree’s order, a node with no children closed as " />"', () => {
     const xml = hierarchyDump('a.b', [
       layoutNode([textNode('first'), layoutNode([textNode('second')]), textNode('third')]),
     ]);
@@ -124,9 +123,6 @@ describe('the screen dump, as uiautomator writes it (BUG-70)', () => {
     ]);
     expect(xml).toMatch(/text="first"[^>]*\/>/);
     expect(xml).toMatch(/ \/><\/node>/);
-    expect(hierarchyDump('a.b', [layoutNode()], { rotation: 1 })).toContain(
-      '<hierarchy rotation="1">',
-    );
   });
 
   test('every node has the dumper’s attributes, in its order; a child’s index is its place among its siblings, and its package its parent’s unless it has its own', () => {
@@ -169,14 +165,16 @@ describe('the screen dump, as uiautomator writes it (BUG-70)', () => {
     ]);
   });
 
-  test('an attribute’s value has &, <, > and " as named entities and a line break or a tab by its number; nothing else is changed', () => {
-    expect(xmlAttribute('Tom & "Jerry" <b>\n\t\r')).toBe(
-      'Tom &amp; &quot;Jerry&quot; &lt;b&gt;&#10;&#9;&#13;',
+  test('a text, a label and a resource-id are written with &, <, > and " as named entities and a line break or a tab by its number; nothing else is changed', () => {
+    const xml = hierarchyDump('a.b', [
+      textNode('Tom & "Jerry" <b>\n\t\r', "Ring 1 1 2, nødnummeret's"),
+      { resourceId: 'a&b' },
+    ]);
+
+    expect(xml).toContain(
+      'text="Tom &amp; &quot;Jerry&quot; &lt;b&gt;&#10;&#9;&#13;" resource-id="" class="android.widget.TextView" package="a.b" content-desc="Ring 1 1 2, nødnummeret\'s"',
     );
-    expect(xmlAttribute("Ring 1 1 2, nødnummeret's")).toBe("Ring 1 1 2, nødnummeret's");
-    expect(hierarchyDump('a.b', [textNode('A & B', 'C "D"')])).toContain(
-      'text="A &amp; B" resource-id="" class="android.widget.TextView" package="a.b" content-desc="C &quot;D&quot;"',
-    );
+    expect(xml).toContain('resource-id="a&amp;b"');
   });
 
   test('React Native’s views as the dump shows them: a button’s testID and label on a clickable Button with its texts below it, a ProgressBar’s and an EditText’s label as content-desc, and an app’s window with Android’s content frame', () => {

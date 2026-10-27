@@ -50,7 +50,7 @@
 // own values and the IDs the app's source holds; every name and number is the
 // test kit's, synthetic. The module is imported in each test, so each reports
 // a missing module on its own.
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { describe, expect, test } from 'vitest';
 import {
   appWindowNode,
@@ -110,7 +110,7 @@ const spelled = (number) => Array.from(number).join(' ');
 /** #1, as an L7 flow chooses it: the test kit's synthetic name and number. */
 const FIRST = EMULATOR_FIRST_CONTACT;
 
-/** The 112 bar every screen draws (CALL-02): the button, its label, and its "112". */
+/** The 112 bar every screen draws: the button, its label, and its "112". */
 const emergencyBar = () =>
   buttonNode({ id: EMERGENCY_ID, label: nb.call.emergency.label, texts: ['112'] });
 
@@ -308,8 +308,9 @@ describe('BUG-70: readScreen names the screen a flow failed on by its translatio
     ]);
   });
 
-  test('BUG-70: a value is matched as it is written, whole: its . ? and + are those characters, and a text with more before or after it is other text', async () => {
+  test('BUG-70: a value is matched as it is written, whole: its . ? and + are those characters, and a text with more before or after it is other text, a placeholder’s value as well as a plain one', async () => {
     const { readScreen } = await screenDump();
+    const name = syntheticDisplayName();
     const texts = [
       nb.grp.firstContact.title, // "…ringe først?"
       nb.grp.firstContact.title.replace(/t\?$/, ''), // "…ringe førs": what an unescaped ? matches
@@ -317,6 +318,12 @@ describe('BUG-70: readScreen names the screen a flow failed on by its translatio
       nb.app.error.screen.replace(/\.$/, 'X'), // "…denne skjermenX": what an unescaped . matches
       `X${nb.grp.waiting}`,
       `${nb.grp.waiting}.`,
+      // Round 3 (test-auditor S3): a placeholder's value, its pattern
+      // anchored at both ends. "{{name}} er fjernet fra gruppen." ends in
+      // plain text, so text after it is no name; "Fjern {{name}}" starts in
+      // plain text, so text before it is none either.
+      `${filled(nb.grp.members.removed, name)} X`,
+      `X${filled(nb.grp.members.remove, name)}`,
     ];
     const xml = hierarchyDump(APP, [layoutNode(texts.map((text) => textNode(text)))]);
 
@@ -326,6 +333,8 @@ describe('BUG-70: readScreen names the screen a flow failed on by its translatio
     expect(nb.grp.firstContact.title).toMatch(/t\?$/);
     expect(nb.grp.firstContact.numberNotUsable).toContain(' + ');
     expect(nb.app.error.screen).toMatch(/\.$/);
+    expect(nb.grp.members.removed).toMatch(/^\{\{\w+\}\} \S.*\.$/);
+    expect(nb.grp.members.remove).toMatch(/^\S+ \{\{\w+\}\}$/);
     expect(lines).toEqual([
       `${APP}: id none; text: grp.firstContact.title; label: none`,
       `${APP}: id none; text: other text (${String(texts[1]?.length)} characters); label: none`,
@@ -333,6 +342,8 @@ describe('BUG-70: readScreen names the screen a flow failed on by its translatio
       `${APP}: id none; text: other text (${String(texts[3]?.length)} characters); label: none`,
       `${APP}: id none; text: other text (${String(texts[4]?.length)} characters); label: none`,
       `${APP}: id none; text: other text (${String(texts[5]?.length)} characters); label: none`,
+      `${APP}: id none; text: other text (${String(texts[6]?.length)} characters); label: none`,
+      `${APP}: id none; text: other text (${String(texts[7]?.length)} characters); label: none`,
     ]);
   });
 
@@ -524,12 +535,16 @@ describe('BUG-70: readScreen reads the text as XML escapes it', () => {
     ]);
   });
 
-  test('BUG-70: an entity is decoded once: "&amp;lt;b&amp;gt;" is the text "&lt;b&gt;", not "<b>"', async () => {
+  test('BUG-70: an entity is decoded once, in a text and in a label: "&amp;lt;b&amp;gt;" is "&lt;b&gt;", not "<b>"', async () => {
     const { readScreen } = await screenDump();
 
     expect(
       readScreen(withRawText('&amp;lt;b&amp;gt;'), { app: APP, translations: SAMPLES }),
     ).toEqual([`${APP}: id none; text: sample.literal; label: none`]);
+    // Round 3 (test-auditor S2): the label's path, decoded on its own.
+    expect(
+      readScreen(withRawLabel('&amp;lt;b&amp;gt;'), { app: APP, translations: SAMPLES }),
+    ).toEqual([`${APP}: id none; text: none; label: sample.literal`]);
   });
 
   test('BUG-70: a character by its number, decimal or hex, is decoded before a label is matched: "Ring 1 1 2, n&#248;dnummeret" is 112’s label', async () => {
@@ -604,7 +619,7 @@ const NOT_A_HIERARCHY = [
   },
   {
     what: 'cat’s error, with no file to print',
-    output: 'cat: /data/local/tmp/trygghverdag-window.xml: No such file or directory\n',
+    output: 'cat: /data/local/tmp/trygghverdag-screen.xml: No such file or directory\n',
     names: /\bhierarchy\b/i,
   },
   {
@@ -748,5 +763,182 @@ describe('BUG-70 and PRIV-07: readScreen prints no number and no name from the s
     // and no ID or package here holds a digit, so any such run came from a
     // text or a label ("112" included).
     expect(printed).not.toMatch(/\d{3,}/);
+  });
+});
+
+// Round 3 (privacy-security-reviewer N2): readScreen prints the app's
+// resource-ids as they are, so it trusts each to be a constant of the app's
+// code, never data a person typed or a number. A React Native testID is the
+// resource-id (react-native 0.86.3's ReactAccessibilityDelegate). So every
+// testID in the app's source must be a string literal, or a name that
+// resolves to a string constant: declared once in its file, at the top level,
+// as `const NAME = '<literal>';` (exported or not), or imported by name from
+// one the app's source exports so. One built at run time, from a template, a
+// variable, a parameter, a property or a call, is refused, and so is a testID
+// set other than as a JSX attribute.
+
+/** Where the app's source is. */
+const APP_SOURCE = new URL('../../apps/mobile/src/', import.meta.url);
+
+/** `source` without its comments: block comments, and lines that hold only a line comment. */
+const withoutComments = (source) =>
+  source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+
+/** Top-level string constants in `source`, `const NAME = '<literal>';`, exported or (with `exported`) only exported: name → literal. */
+function stringConstants(source, { exported = false } = {}) {
+  const declaration = exported
+    ? /^export const ([A-Za-z_$][\w$]*)(?:: string)? = (['"])([^'"\\\n]*)\2;$/gm
+    : /^(?:export )?const ([A-Za-z_$][\w$]*)(?:: string)? = (['"])([^'"\\\n]*)\2;$/gm;
+  return new Map(
+    [...withoutComments(source).matchAll(declaration)].map(([, name = '', , value = '']) => [
+      name,
+      value,
+    ]),
+  );
+}
+
+/** The names `source` imports by name, as it uses them: local name → the name exported. */
+function importedNames(source) {
+  const names = new Map();
+  for (const [, list = ''] of source.matchAll(/^import\s+(?:type\s+)?\{([^}]*)\}\s*from\s/gm)) {
+    for (const entry of list.split(',')) {
+      const [exportedName = '', local = exportedName] = entry
+        .replace(/^\s*type\s+/, '')
+        .trim()
+        .split(/\s+as\s+/);
+      if (exportedName !== '') names.set(local.trim(), exportedName.trim());
+    }
+  }
+  return names;
+}
+
+/** The expression a `testID=` at the start of `rest` is given, or null when it is neither a quoted string nor braces. */
+function attributeValue(rest) {
+  const quote = rest[0];
+  if (quote === '"' || quote === "'") return rest.slice(0, rest.indexOf(quote, 1) + 1);
+  if (quote !== '{') return null;
+  let depth = 0;
+  for (let at = 0; at < rest.length; at += 1) {
+    if (rest[at] === '{') depth += 1;
+    if (rest[at] === '}') depth -= 1;
+    if (depth === 0) return rest.slice(1, at).trim();
+  }
+  return null;
+}
+
+/**
+ * Each testID in `source`, a .tsx file, in order: what it is given
+ * (`written`), and either the constant it is (`value`) or why it is refused
+ * (`refused`). `exported` is every string constant the app's source exports.
+ */
+function testIdsOf(source, exported) {
+  const code = withoutComments(source);
+  const local = stringConstants(code);
+  const imported = importedNames(code);
+  return [...code.matchAll(/\btestID\b/g)].map((found) => {
+    const rest = code.slice((found.index ?? 0) + 'testID'.length);
+    const equals = /^\s*=\s*/.exec(rest);
+    if (equals === null) {
+      return { written: rest.slice(0, 40).trim(), refused: 'not a JSX attribute' };
+    }
+    const written = attributeValue(rest.slice(equals[0].length));
+    if (written === null) return { written: rest.slice(0, 40).trim(), refused: 'no value read' };
+    const literal = /^(['"])([^'"\\]*)\1$/.exec(written);
+    if (literal !== null) return { written, value: literal[2] };
+    if (!/^[A-Za-z_$][\w$]*$/.test(written)) {
+      return { written, refused: 'built at run time: a template, a property, a call or more' };
+    }
+    const declarations = [
+      ...code.matchAll(new RegExp(`\\b(?:const|let|var)\\s+${written}\\b`, 'g')),
+    ].length;
+    if (local.has(written) && declarations === 1) return { written, value: local.get(written) };
+    const source_ = imported.get(written);
+    if (declarations === 0 && source_ !== undefined && exported.has(source_)) {
+      return { written, value: exported.get(source_) };
+    }
+    return { written, refused: 'a name that is no string constant of the app' };
+  });
+}
+
+describe('BUG-70 and PRIV-07: every resource-id the reader prints is a constant of the app’s code', () => {
+  test('BUG-70 and PRIV-07 (the check the test below uses): a testID that is a string, or a name declared once as a string constant in its file or imported from one the app exports, passes; one built from a template, a variable, a parameter, a property or a call, or set other than as an attribute, is refused', () => {
+    const exported = new Map([['SHARED_ID', 'trygghverdag-shared']]);
+    const judged = (source) =>
+      testIdsOf(source, exported).map(({ value, refused }) => value ?? `refused: ${refused}`);
+
+    expect(
+      judged(
+        [
+          "import { SHARED_ID, OTHER as RENAMED } from '../shared/ids';",
+          "const LOCAL_ID = 'trygghverdag-local';",
+          'export const EXPORTED_ID = "trygghverdag-exported";',
+          '// testID={notCode} in a comment is no testID',
+          '<A testID="trygghverdag-literal" />',
+          "<B testID={'trygghverdag-braced'} />",
+          '<C testID={LOCAL_ID} />',
+          '<D testID={EXPORTED_ID} />',
+          '<E testID={SHARED_ID} />',
+        ].join('\n'),
+      ),
+    ).toEqual([
+      'trygghverdag-literal',
+      'trygghverdag-braced',
+      'trygghverdag-local',
+      'trygghverdag-exported',
+      'trygghverdag-shared',
+    ]);
+    const refusals = [
+      // A person's name in a resource-id: what this test is for.
+      'function Row({ name }) { return <A testID={`contact-${name}`} />; }',
+      'function Row({ id }) { return <A testID={id} />; }',
+      'function Row(props) { return <A testID={props.id} />; }',
+      "const ROW_ID = 'row';\nfunction Row({ n }) { const ROW_ID = `row-${n}`; return <A testID={ROW_ID} />; }",
+      'function Row({ n }) { return <A testID={rowId(n)} />; }',
+      "import { RENAMED } from './ids';\n<A testID={RENAMED} />",
+      "let MUTABLE = 'row';\n<A testID={MUTABLE} />",
+      '<A {...{ testID: name }} />',
+    ];
+    for (const source of refusals) {
+      const ids = testIdsOf(source, exported);
+      expect(ids, source).toHaveLength(1);
+      expect(ids[0]?.refused, source).toEqual(expect.any(String));
+      expect(ids[0]?.value, source).toBeUndefined();
+    }
+  });
+
+  test('BUG-70 and PRIV-07: every testID in the app’s source (apps/mobile/src, its .tsx files, test files left out) is a string constant; today the call button’s and 112’s, as their files declare them', () => {
+    const files = readdirSync(APP_SOURCE, { recursive: true })
+      .map(String)
+      .filter((file) => file.endsWith('.tsx') && !file.endsWith('.test.tsx'));
+    const sources = (filter) =>
+      readdirSync(APP_SOURCE, { recursive: true })
+        .map(String)
+        .filter(filter)
+        .map((file) => readFileSync(new URL(file, APP_SOURCE), 'utf8'));
+    const exported = new Map(
+      sources((file) => /\.tsx?$/.test(file) && !/\.test\.tsx?$/.test(file)).flatMap((source) => [
+        ...stringConstants(source, { exported: true }),
+      ]),
+    );
+    const ids = files.flatMap((file) =>
+      testIdsOf(readFileSync(new URL(file, APP_SOURCE), 'utf8'), exported).map((id) => ({
+        file,
+        ...id,
+      })),
+    );
+
+    // Not vacuous: the source was read, and the two testIDs the L7 flows use are found.
+    expect(files).toContain('features/call/call-button.tsx');
+    expect(ids).toEqual(
+      expect.arrayContaining([
+        { file: 'features/call/call-button.tsx', written: 'CALL_BUTTON_ID', value: CALL_ID },
+        {
+          file: 'features/call/emergency-bar.tsx',
+          written: 'EMERGENCY_BUTTON_ID',
+          value: EMERGENCY_ID,
+        },
+      ]),
+    );
+    expect(ids.filter(({ refused }) => refused !== undefined)).toEqual([]);
   });
 });

@@ -431,7 +431,11 @@ const LAUNCHER_SCREEN = hierarchyDump(LAUNCHER_PACKAGE, [
 ]);
 
 /** BUG-70: where e2e:android has uiautomator write the screen on the device, and reads it back with cat. */
-const SCREEN_DUMP_PATH = '/data/local/tmp/trygghverdag-window.xml';
+// Round 3 (test-auditor's note): was trygghverdag-window.xml. A screen-unread
+// line names the path, and its "window" would meet the CALL-01 evidence
+// test's /\b(window|package|focus|focused)\b/ with UNREAD, so that test could
+// pass on the screen's line rather than on the focused window's.
+const SCREEN_DUMP_PATH = '/data/local/tmp/trygghverdag-screen.xml';
 
 /** Where the wakefulness goes in the power dump the stand-in prints (setUpWorld, worldAnswers). */
 const WAKEFULNESS_SLOT = '<<wakefulness>>';
@@ -3513,7 +3517,7 @@ describe('CALL-01, approach 9 (PR #101’s first android-e2e): an awake, unlocke
 // So (the main session's design under D-031): whenever a Maestro run fails,
 // the first run or a scripted flow, the script reads the screen right after
 // Maestro exits, before any other step touches the phone, with `adb -s
-// <serial> shell uiautomator dump /data/local/tmp/trygghverdag-window.xml`
+// <serial> shell uiautomator dump /data/local/tmp/trygghverdag-screen.xml`
 // then `adb -s <serial> shell cat` of that file, and prints
 // lib/screen-dump.mjs's readScreen lines under a heading that names the flow,
 // or the first run, and says only translation keys and ids are shown. Best
@@ -3770,7 +3774,7 @@ describe('BUG-70: when a Maestro run fails, the job log names the screen it fail
   });
 
   test.each(FAILED_MAESTRO_RUNS)(
-    'BUG-70: when $what fails in Maestro, the screen is read right after: the next three adb steps are uiautomator dump to /data/local/tmp/trygghverdag-window.xml, cat of it and rm -f of it, before any wake, key, font size, dumpsys or logcat, and only once',
+    'BUG-70: when $what fails in Maestro, the screen is read right after: the next three adb steps are uiautomator dump to /data/local/tmp/trygghverdag-screen.xml, cat of it and rm -f of it, before any wake, key, font size, dumpsys or logcat, and only once',
     async ({ run }) => {
       const { output, calls } = await run();
       const failed = calls.findLastIndex(isFlowRun);
