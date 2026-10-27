@@ -21,8 +21,9 @@
  * step given the Claude secrets. The flag stops install scripts only. A run
  * on a branch still gives that branch's code the secrets in other ways: its
  * root .pnpmfile.cjs (below), and in a manual run its Claude config and the
- * scripts the job runs. That is accepted: anyone with write access can reach
- * the secrets with a new workflow file anyway.
+ * scripts the job runs. This adds no exposure beyond write access itself:
+ * anyone who can push a branch can already reach repository secrets with a
+ * new workflow file.
  *
  * Test names carry no <ID>-ACn: prefix: a bug's tests are named BUG-<n>, and
  * BUG- is not a requirement prefix req:coverage collects.

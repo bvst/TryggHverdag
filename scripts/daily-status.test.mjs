@@ -10,12 +10,12 @@
 // target any branch that has the file, and runs that branch's code. Its
 // install's --ignore-scripts (BUG-68) stops install scripts only: the branch's
 // .pnpmfile.cjs, Claude config and `pnpm run req:coverage` still run with the
-// Claude secrets, and its scripts/daily-status.mjs with `issues: write`. That
-// is accepted: anyone with write access can reach the secrets with a new
-// workflow file anyway. What can be held before the first morning is its
-// shape: the job that reads other people's text cannot write, the job that
-// writes still runs when the first one fails, and the lists that have to agree
-// do.
+// Claude secrets, and its scripts/daily-status.mjs with `issues: write`. This
+// adds no exposure beyond write access itself: anyone who can push a branch
+// can already reach repository secrets with a new workflow file. What can be
+// held before the first morning is its shape: the job that reads other
+// people's text cannot write, the job that writes still runs when the first
+// one fails, and the lists that have to agree do.
 //
 // Read as text, like the rest of scripts/: the repository keeps no YAML parser,
 // and the shapes asserted on are few and fixed.
