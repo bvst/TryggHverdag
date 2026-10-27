@@ -15,16 +15,18 @@
  * Android's back key, and a call still in progress ended. Before each, the
  * phone is woken and its keyguard lifted when `dumpsys power` says it is not
  * awake, and when one fails in Maestro, the phone's wakefulness and the
- * focused window's package are printed. A flow the order names that is absent,
- * or there but not tagged `scripted`, stops the run before any flow runs, as
- * does a flow tagged `scripted` that the order does not name. Maestro
- * cannot see a call, so the script reads Telecom's record instead, as
- * SPIKE-01's S6 did (lib/call-records.mjs). The font size is set back to the
- * usual at the end, even after a failed step or flow, and a failure names the
- * flow and the step. No step taps anything, and back is a key, not a tap:
- * the flows never tap in the dialer, and the one call placed is to the test
- * kit's synthetic #1, in Ofcom's range reserved for drama, on an emulator
- * with no network (SPIKE-01-AC10's rule).
+ * focused window's package are printed. Whenever a Maestro run fails, the
+ * first run or one of these, the screen it failed on is printed first, by
+ * translation keys and ids only, never its text (BUG-70, lib/screen-dump.mjs).
+ * A flow the order names that is absent, or there but not tagged `scripted`,
+ * stops the run before any flow runs, as does a flow tagged `scripted` that
+ * the order does not name. Maestro cannot see a call, so the script reads
+ * Telecom's record instead, as SPIKE-01's S6 did (lib/call-records.mjs). The
+ * font size is set back to the usual at the end, even after a failed step or
+ * flow, and a failure names the flow and the step. No step taps anything, and
+ * back is a key, not a tap: the flows never tap in the dialer, and the one
+ * call placed is to the test kit's synthetic #1, in Ofcom's range reserved
+ * for drama, on an emulator with no network (SPIKE-01-AC10's rule).
  *
  * Usage:
  *   pnpm run e2e:android                 the whole run: check, build, install, test
@@ -77,6 +79,7 @@ import {
   waitForLocale,
 } from './lib/e2e-android.mjs';
 import { run } from './lib/proc.mjs';
+import { readScreen } from './lib/screen-dump.mjs';
 
 const root = process.cwd();
 const args = process.argv.slice(2);
@@ -275,6 +278,60 @@ const testCommand = ({ report, debugOutput, flow }) =>
     flow,
   });
 
+/** Where `uiautomator dump` writes the screen on the device, to be read with cat and removed (BUG-70). */
+const SCREEN_DUMP_PATH = '/data/local/tmp/trygghverdag-screen.xml';
+
+/**
+ * The limits, in milliseconds, on the dump and on each of cat and rm: short,
+ * so a hung adb cannot hold a failed run for minutes before it stops. The dump
+ * takes a few seconds; cat and rm of one file, far less.
+ */
+const SCREEN_DUMP_TIMEOUT_MS = 20_000;
+const SCREEN_FILE_TIMEOUT_MS = 10_000;
+
+/**
+ * The screen now, as lib/screen-dump.mjs names it: `{ lines }`, or `{ unread }`
+ * saying why not. Only a dump that says it wrote the file is read, so a file
+ * an earlier run left there never names this screen; the file is removed right
+ * after cat, best effort: a refused rm changes nothing.
+ */
+function screenNow() {
+  // `run`, not `step`: step puts adb's output in its error message, and no
+  // screen text may reach a message (PRIV-07).
+  const shell = (shellArgs, timeout) =>
+    run(adb, ['-s', device ?? '', 'shell', ...shellArgs], { timeout });
+  const dump = shell(['uiautomator', 'dump', SCREEN_DUMP_PATH], SCREEN_DUMP_TIMEOUT_MS);
+  if (!dump.ok) return { unread: `uiautomator dump failed (exit code ${String(dump.status)})` };
+  if (!dump.output.includes(`dumped to: ${SCREEN_DUMP_PATH}`)) {
+    return { unread: `uiautomator dump did not say it wrote ${SCREEN_DUMP_PATH}` };
+  }
+  const cat = shell(['cat', SCREEN_DUMP_PATH], SCREEN_FILE_TIMEOUT_MS);
+  shell(['rm', '-f', SCREEN_DUMP_PATH], SCREEN_FILE_TIMEOUT_MS);
+  if (!cat.ok) return { unread: `cat of the dump failed (exit code ${String(cat.status)})` };
+  try {
+    return { lines: readScreen(cat.output, { app: appId, translations }) };
+  } catch (error) {
+    return { unread: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/**
+ * The screen `who` failed on (BUG-70), read right after Maestro exits, before
+ * any other step touches the phone: its translation keys and ids, or one line
+ * saying it is unread and why. Never a text from it (PRIV-07).
+ */
+function printScreen(who) {
+  const { lines, unread } = screenNow();
+  if (lines === undefined) {
+    process.stdout.write(`e2e:android: ${who}: the screen then: unread: ${unread}.\n`);
+    return;
+  }
+  process.stdout.write(
+    `e2e:android: ${who}: the screen then, by translation keys and ids only:\n` +
+      lines.map((line) => `  ${line}\n`).join(''),
+  );
+}
+
 /** The app's own lines in the device's crash buffer, printed for a run that failed. */
 function printCrashes() {
   // Only the app's own lines: the crash buffer holds every app's crashes.
@@ -307,6 +364,11 @@ function runFlows(title, { report, debugOutput, flow }) {
   let exit = `Maestro exited with code ${String(maestroRun.status)}`;
   if (maestroRun.signal !== null) exit = `Maestro was stopped by ${maestroRun.signal}`;
   if (maestroRun.error !== undefined) exit = `Maestro could not run: ${maestroRun.error.message}`;
+  // Maestro's reason is in the job log before anything else is asked of the
+  // phone, even if what follows hangs and the step is killed.
+  const who = flow ?? 'the first run';
+  process.stdout.write(`\ne2e:android: ${who} failed: ${exit}. The screen is read next.\n`);
+  printScreen(who);
   printCrashes();
   return (
     `${exit}, and its report says: ${verdict.message} Both have to pass. ` +
@@ -386,7 +448,8 @@ function bestEffort(read) {
  * What the phone was showing when `flow` failed in Maestro (CALL-01, approach
  * 9): its wakefulness and the focused window's package, printed, or unread
  * when they cannot be read. Only the value and the package name are printed,
- * never a dump's text (PRIV-07).
+ * never a dump's text (PRIV-07). They are read after the screen dump (BUG-70),
+ * so a few seconds after the failure.
  */
 function printEvidence(flow) {
   const wakefulness = bestEffort(wakefulnessNow);

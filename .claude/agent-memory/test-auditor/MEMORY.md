@@ -69,3 +69,4 @@
 - [Jest virtual mock cache](feedback_jest_virtual_mock_cache.md) — virtual mock of an installed package skipped after another file in the worker loaded it from the same importer; all importers must agree
 - [Ordering "before it shows"](feedback_ordering_before_shows.md) — unawaited+caught and after-update faults pass unless the side effect is held
 - [Guard walk depth](feedback_guard_walk_depth.md) — walker skip lists at every depth vs the runner's testMatch; plant nested build/, aliases
+- [BUG-70 audit](project_bug70_audit.md) — d88a877: stale requirements-status.md (traceability red), label decode-twice and `$` anchor survive; entry mutants via spawn --import injection

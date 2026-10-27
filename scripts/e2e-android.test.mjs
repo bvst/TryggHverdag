@@ -36,14 +36,21 @@ import { APK, SCRIPTED_FLOWS, ensureMaestro } from './lib/e2e-android.mjs';
 import {
   DIALER_PACKAGE,
   appWindow,
+  appWindowNode,
+  buttonNode,
   callRecord,
   dialerWindow,
   dialingEvents,
   dialledEvents,
+  editTextNode,
   endingEvents,
+  hierarchyDump,
+  layoutNode,
   maskedAddress,
   powerDump,
+  progressNode,
   telecomDump,
+  textNode,
   windowDump,
 } from '../packages/test-kit/src/android-dumps.ts';
 import { EMULATOR_FIRST_CONTACT, MOBILE } from '../packages/test-kit/src/fixtures/phone-numbers.ts';
@@ -310,6 +317,14 @@ function maestroBody({ log, envLog, report, crashes, exit, world }) {
  * `breaksDumps`, after which `dumpsys power` and `dumpsys window` fail. A
  * call with `inProgress: true` has its events only up to SET_DIALING; the
  * end-call key ends it (worldAnswers).
+ *
+ * Amended for BUG-70 (additive: no existing test sets either): the device
+ * also has
+ *   screen       what `uiautomator dump` writes: the screen, as a hierarchy
+ *                (the launcher's until a flow leaves another).
+ * A scripted flow's `effects` entry may say `screen`, the screen it leaves,
+ * and the first run's `firstRun.screen` the one it leaves; in either, {APP}
+ * is the application ID Maestro was given.
  */
 const WORLD_MAESTRO = [
   "import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';",
@@ -347,6 +362,10 @@ const WORLD_MAESTRO = [
   "      config.firstRun.crashLines.map((line) => line.replace('$app', app)).join('\\n') + '\\n',",
   '    );',
   '  }',
+  // BUG-70: the screen the first run leaves, when the test gives one.
+  '  if (config.firstRun.screen !== undefined) {',
+  "    writeFileSync(at('screen'), config.firstRun.screen.replaceAll('{APP}', app));",
+  '  }',
   '  process.exit(config.firstRun.exit);',
   '}',
   // CALL-01, approach 9 (run 39956809738): a sleeping or locked phone shows
@@ -379,6 +398,8 @@ const WORLD_MAESTRO = [
   "  writeFileSync(at('keyguard'), 'shown\\n');",
   '}',
   "if (effect.breaksDumps === true) writeFileSync(at('dumps_broken'), 'yes\\n');",
+  // BUG-70: the screen the flow leaves, when its effects say.
+  "if (effect.screen !== undefined) writeFileSync(at('screen'), effect.screen.replaceAll('{APP}', app));",
   "const status = effect.status ?? 'SUCCESS';",
   "const output = after('--output');",
   'if (output !== undefined) {',
@@ -395,6 +416,26 @@ const EMERGENCY_ADDRESS = maskedAddress('112');
 /** The launcher, in front before any flow has run. */
 const LAUNCHER_PACKAGE = 'com.google.android.apps.nexuslauncher';
 const LAUNCHER_WINDOW = `Window{1f2e3d4 u0 ${LAUNCHER_PACKAGE}/${LAUNCHER_PACKAGE}.NexusLauncherActivity}`;
+
+/** BUG-70: the launcher's screen, as uiautomator dumps it, in front before any flow has run. */
+const LAUNCHER_SCREEN = hierarchyDump(LAUNCHER_PACKAGE, [
+  layoutNode(
+    [
+      {
+        resourceId: `${LAUNCHER_PACKAGE}:id/workspace`,
+        children: [textNode('Telefon'), textNode('Meldinger')],
+      },
+    ],
+    'android.widget.FrameLayout',
+  ),
+]);
+
+/** BUG-70: where e2e:android has uiautomator write the screen on the device, and reads it back with cat. */
+// Round 3 (test-auditor's note): was trygghverdag-window.xml. A screen-unread
+// line names the path, and its "window" would meet the CALL-01 evidence
+// test's /\b(window|package|focus|focused)\b/ with UNREAD, so that test could
+// pass on the screen's line rather than on the focused window's.
+const SCREEN_DUMP_PATH = '/data/local/tmp/trygghverdag-screen.xml';
 
 /** Where the wakefulness goes in the power dump the stand-in prints (setUpWorld, worldAnswers). */
 const WAKEFULNESS_SLOT = '<<wakefulness>>';
@@ -459,6 +500,13 @@ function setUpWorld({ dir, stateDir, flowsDir, world }) {
   writeFileSync(path.join(stateDir, 'wakefulness'), 'Awake\n');
   writeFileSync(path.join(stateDir, 'keyguard'), 'gone\n');
   writeFileSync(path.join(stateDir, 'in_progress'), '');
+  // BUG-70: the launcher's screen, until a flow leaves another; and, with
+  // `world.staleScreen`, a file at SCREEN_DUMP_PATH that an earlier run on
+  // the same emulator left there.
+  writeFileSync(path.join(stateDir, 'screen'), LAUNCHER_SCREEN);
+  if (world.staleScreen !== undefined) {
+    writeFileSync(path.join(stateDir, 'screen-file'), world.staleScreen);
+  }
   const [powerHead = '', powerTail = ''] = powerDump(WAKEFULNESS_SLOT).split(WAKEFULNESS_SLOT);
   writeFileSync(path.join(stateDir, 'power-head'), powerHead);
   writeFileSync(path.join(stateDir, 'power-tail'), powerTail);
@@ -544,8 +592,47 @@ function setUpWorld({ dir, stateDir, flowsDir, world }) {
  * leaves the phone as it was) or 'powerRead' (`dumpsys power` prints its dump
  * with no mWakefulness= line).
  *
- * @param {{ stateDir: string, refuse?: 'revoke' | 'largeFont' | 'wake' | 'powerRead' }} world
+ * Amended for BUG-70 (additive: today's script calls none of these, and no
+ * existing test refuses them): `uiautomator dump`, to SCREEN_DUMP_PATH and
+ * nowhere else, writes the screen (WORLD_MAESTRO) to the device's file at that
+ * path (screen-file) and says so, as the tool does ("UI hierchary dumped to:
+ * …", its own spelling), and the stand-in keeps what it wrote (screen-dumped),
+ * for the test; `cat` of that path prints the device's file, or fails as cat
+ * does when there is none; and `rm -f` of that path removes it. `refuse` may
+ * be 'screenDump': uiautomator fails, as it would with another client still
+ * holding the accessibility connection, writes nothing, and exits 1 (the
+ * message and the status are the stand-in's: neither was captured from CI);
+ * 'screenNullRoot': uiautomator answers as AOSP's DumpCommand does with no
+ * window to read, as remembered from AOSP's source and not captured from CI:
+ * "ERROR: null root node returned by UiTestAutomationBridge." on stderr,
+ * nothing written, and exit 0; or 'screenRemove': `rm -f` of that path fails,
+ * and the file stays; or, round 4 (safety-reviewer), 'screenCat': the dump
+ * works and says so, and `cat` of that path fails with a synthetic error and
+ * exit 1.
+ *
+ * @param {{ stateDir: string, refuse?: 'revoke' | 'largeFont' | 'wake' | 'powerRead' | 'screenDump' | 'screenNullRoot' | 'screenRemove' | 'screenCat' }} world
  */
+/** BUG-70: how the stand-in's `uiautomator` answers, as worldAnswers says. */
+function screenDumpAnswer(refuse, file) {
+  if (refuse === 'screenDump') {
+    return [
+      '        echo "java.lang.IllegalStateException: UiAutomationService already registered (synthetic)" >&2',
+      '        exit 1 ;;',
+    ];
+  }
+  if (refuse === 'screenNullRoot') {
+    return ['        echo "ERROR: null root node returned by UiTestAutomationBridge." >&2 ;;'];
+  }
+  return [
+    `        if [ "$*" != "shell uiautomator dump ${SCREEN_DUMP_PATH}" ]; then`,
+    `          echo "the stand-in emulator dumps the screen only to ${SCREEN_DUMP_PATH}" >&2; exit 2`,
+    '        fi',
+    `        /bin/cp ${file('screen')} ${file('screen-file')}`,
+    `        /bin/cp ${file('screen')} ${file('screen-dumped')}`,
+    `        echo "UI hierchary dumped to: ${SCREEN_DUMP_PATH}" ;;`,
+  ];
+}
+
 function worldAnswers({ stateDir, refuse }) {
   const file = (name) => `"${path.join(stateDir, name)}"`;
   const refusal = (what) => [
@@ -557,6 +644,26 @@ function worldAnswers({ stateDir, refuse }) {
   const broken = (service) =>
     `        if [ -s ${file('dumps_broken')} ]; then echo "Can't find service: ${service}" >&2; exit 1; fi`;
   return [
+    // BUG-70: the screen, dumped by uiautomator to a file on the device,
+    // printed by cat, and removed by rm.
+    '      *uiautomator*)',
+    ...screenDumpAnswer(refuse, file),
+    `      "shell cat ${SCREEN_DUMP_PATH}")`,
+    ...(refuse === 'screenCat'
+      ? [
+          `        echo "cat: ${SCREEN_DUMP_PATH}: Input/output error (synthetic)" >&2`,
+          '        exit 1 ;;',
+        ]
+      : [
+          `        if [ ! -f ${file('screen-file')} ]; then`,
+          `          echo "cat: ${SCREEN_DUMP_PATH}: No such file or directory" >&2; exit 1`,
+          '        fi',
+          `        /bin/cat ${file('screen-file')} ;;`,
+        ]),
+    `      "shell rm -f ${SCREEN_DUMP_PATH}")`,
+    ...(refuse === 'screenRemove'
+      ? [`        echo "rm: ${SCREEN_DUMP_PATH}: Read-only file system" >&2`, '        exit 1 ;;']
+      : [`        /bin/rm -f ${file('screen-file')} ;;`]),
     `      *dumpsys*telecom*) /bin/cat ${file('telecom')} ;;`,
     '      *dumpsys*window*)',
     broken('window'),
@@ -1236,6 +1343,16 @@ function expectWaitedOut(wait, { deadline, interval }, output) {
  *   `crash` asks for (WORLD_MAESTRO's `firstRun`). The scripted flows then run
  *   after a first run that passes, each as it should. 'unscripted' stays, for
  *   the test that the run stops when they are absent.
+ *
+ *   Amended for BUG-70 (additive): `firstRunScreen` is the screen that first
+ *   run leaves, as uiautomator dumps it ({APP} for the application ID); unset,
+ *   the launcher's stays, as before. And the result holds `screenDumped`, what
+ *   uiautomator last wrote on the device, empty when nothing dumped the screen,
+ *   and `screenFileAtEnd`, the file at that path on the device at the end, or
+ *   null when there is none (round 2: the script removes it after reading it).
+ *   Round 4 (additive): `refuse` is what the stand-in emulator refuses in the
+ *   world a run given no `world` gets (worldAnswers), so a first run can meet
+ *   a refused dump too; unset, it refuses nothing, as before.
  */
 async function runPastPreflight({
   args = ['--skip-build'],
@@ -1261,6 +1378,8 @@ async function runPastPreflight({
   copyFlows = 'all',
   extraFlows = {},
   world,
+  firstRunScreen,
+  refuse,
 } = {}) {
   const dir = mkdtempSync(path.join(tmpdir(), 'e2e-android-past-preflight-'));
   try {
@@ -1322,11 +1441,13 @@ async function runPastPreflight({
       (copyFlows === 'all'
         ? {
             effects: AS_IT_SHOULD_BE,
+            refuse,
             firstRun: {
               report,
               exit: maestroExit,
               crashes: crash ? crashes : undefined,
               crashLines: CRASH_BUFFER,
+              screen: firstRunScreen,
             },
           }
         : undefined);
@@ -1461,6 +1582,13 @@ async function runPastPreflight({
       // keeps out of the job log were there to leak.
       telecomAtEnd: lines(path.join(stateDir, 'telecom')).join('\n'),
       windowAtEnd: lines(path.join(stateDir, 'window')).join('\n'),
+      // Added for BUG-70: what uiautomator last wrote on the device, so a test
+      // can show that what it keeps out of the job log was there to leak; and
+      // the device's file at that path at the end, null when there is none.
+      screenDumped: lines(path.join(stateDir, 'screen-dumped')).join('\n'),
+      screenFileAtEnd: existsSync(path.join(stateDir, 'screen-file'))
+        ? readFileSync(path.join(stateDir, 'screen-file'), 'utf8')
+        : null,
     };
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -2586,13 +2714,14 @@ const endsTheCall = (call) =>
  * A run with every flow copied and the stand-in emulator's world, as it should
  * be unless `effects` or `refuse` say otherwise. Amended for CALL-01, approach
  * 9 (PRIV-07): `unmasked` has Telecom's record and the window dumps hold
- * numbers in full (setUpWorld).
+ * numbers in full (setUpWorld). Amended for BUG-70 (additive): `staleScreen`
+ * is a file an earlier run left at the path the script dumps the screen to.
  */
-const runScripted = ({ effects = {}, refuse, extraFlows, unmasked } = {}) =>
+const runScripted = ({ effects = {}, refuse, extraFlows, unmasked, staleScreen } = {}) =>
   runPastPreflight({
     copyFlows: 'all',
     extraFlows,
-    world: { effects: { ...AS_IT_SHOULD_BE, ...effects }, refuse, unmasked },
+    world: { effects: { ...AS_IT_SHOULD_BE, ...effects }, refuse, unmasked, staleScreen },
   });
 
 /**
@@ -3067,6 +3196,26 @@ const SCRIPT_ORDER = SCRIPTED_FLOWS.map(({ flow }) => flow);
 /** A line that says something could not be read. */
 const UNREAD = /\bunread\b|\bcould not be read\b|\bnot read\b/i;
 
+/** `text` as a pattern that matches it and nothing else. */
+const literally = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/**
+ * Whether `stdout` holds printEvidence's own line for `flow` naming `what`
+ * ("phone's wakefulness" or "focused window's package") as a value `value`
+ * matches, to the end of the line: `e2e:android: <flow> … The <what> then:
+ * <value>.` Added in BUG-70's round 5 (RG-03): the screen's lines name
+ * packages too, the launcher's among them, so a test of the evidence matches
+ * its line, not the value anywhere in the job log.
+ */
+const saysEvidence = (stdout, flow, what, value) =>
+  stdout
+    .split('\n')
+    .some((line) =>
+      new RegExp(`\\b${literally(flow)}\\b.*\\bThe ${literally(what)} then: ${value}\\.$`).test(
+        line,
+      ),
+    );
+
 /** A job-log line that says the end-call key was pressed. */
 const SAYS_END_CALL = /KEYCODE_ENDCALL|\bend[- ]?call key\b/i;
 
@@ -3317,7 +3466,7 @@ describe('CALL-01, approach 9 (PR #101’s first android-e2e): an awake, unlocke
   );
 
   test('CALL-01-AC2, CALL-01-AC3, CALL-01-AC4 and CALL-01-AC8: when a scripted flow fails, before the run stops the script reads and prints the phone’s wakefulness and the focused window’s package, and the failure stays the flow’s', async () => {
-    const { code, stderr, output, calls, invocations } = await runScripted({
+    const { code, stdout, stderr, output, calls, invocations } = await runScripted({
       effects: {
         'call-without-permission': { focus: 'launcher', wakefulness: 'Dozing', status: 'ERROR' },
       },
@@ -3329,8 +3478,23 @@ describe('CALL-01, approach 9 (PR #101’s first android-e2e): an awake, unlocke
     expect(run, output).toBeDefined();
     expect(run?.after.some(isPowerRead), output).toBe(true);
     expect(run?.after.some(isWindowRead), output).toBe(true);
-    expect(output).toContain('Dozing');
-    expect(output).toContain(LAUNCHER_PACKAGE);
+    // RG-03 (BUG-70, round 5): was toContain('Dozing') and
+    // toContain(LAUNCHER_PACKAGE) anywhere in the job log, which the screen's
+    // lines (the launcher's package among them) made vacuous; now the
+    // evidence's own lines, as on main only they could supply it.
+    expect(
+      saysEvidence(stdout, 'call-without-permission.yaml', "phone's wakefulness", 'Dozing'),
+      output,
+    ).toBe(true);
+    expect(
+      saysEvidence(
+        stdout,
+        'call-without-permission.yaml',
+        "focused window's package",
+        literally(LAUNCHER_PACKAGE),
+      ),
+      output,
+    ).toBe(true);
     expect(code, output).not.toBe(0);
     expect(code, 'it was killed rather than finishing').not.toBeNull();
     expect(stderr, output).toContain('call-without-permission');
@@ -3338,24 +3502,32 @@ describe('CALL-01, approach 9 (PR #101’s first android-e2e): an awake, unlocke
   });
 
   test('CALL-01-AC2, CALL-01-AC3, CALL-01-AC4 and CALL-01-AC8: when that evidence cannot be read, it is printed as unread, and the failure stays the flow’s', async () => {
-    const { code, stderr, output, calls, fontScaleAtEnd } = await runScripted({
+    const { code, stdout, stderr, output, calls, fontScaleAtEnd } = await runScripted({
       effects: {
         'call-without-permission': { focus: 'dialer', status: 'ERROR', breaksDumps: true },
       },
     });
-    const lines = output.split('\n');
     const failed = calls.findIndex(
       (call) => isFlowRun(call) && /\bcall-without-permission\.yaml\b/.test(call),
     );
 
+    // RG-03 (BUG-70, round 5): was any line with "wakeful", and any with
+    // window, package or focus, saying unread. Not vacuous at HEAD (no screen
+    // line has those words), but a screen-unread line could come to; now the
+    // evidence's own lines.
     expect(
-      lines.filter((line) => /wakeful/i.test(line) && UNREAD.test(line)),
+      saysEvidence(stdout, 'call-without-permission.yaml', "phone's wakefulness", 'unread\\b.*'),
       output,
-    ).not.toEqual([]);
+    ).toBe(true);
     expect(
-      lines.filter((line) => /\b(window|package|focus|focused)\b/i.test(line) && UNREAD.test(line)),
+      saysEvidence(
+        stdout,
+        'call-without-permission.yaml',
+        "focused window's package",
+        'unread\\b.*',
+      ),
       output,
-    ).not.toEqual([]);
+    ).toBe(true);
     expect(code, output).not.toBe(0);
     expect(code, 'it was killed rather than finishing').not.toBeNull();
     expect(stderr, output).toContain('call-without-permission');
@@ -3367,7 +3539,7 @@ describe('CALL-01, approach 9 (PR #101’s first android-e2e): an awake, unlocke
   });
 
   test('CALL-01-AC2, CALL-01-AC3, CALL-01-AC4, CALL-01-AC8 and PRIV-07: with numbers in full in Telecom’s record and the window dump, the evidence of a failed flow names the wakefulness and the package, and no number, nor six of its digits, appears in the job log', async () => {
-    const { code, output, telecomAtEnd, windowAtEnd } = await runScripted({
+    const { code, stdout, output, telecomAtEnd, windowAtEnd } = await runScripted({
       unmasked: true,
       effects: {
         'call-without-permission': { focus: 'numbered', wakefulness: 'Dozing', status: 'ERROR' },
@@ -3382,11 +3554,561 @@ describe('CALL-01, approach 9 (PR #101’s first android-e2e): an awake, unlocke
     expect(numberLeaks(output), output).toEqual([]);
     // Not vacuous: the evidence is there. The focused window has no package
     // of its own, so the package is the focused app's, the launcher's.
-    expect(output).toContain('Dozing');
-    expect(output).toContain(LAUNCHER_PACKAGE);
+    // RG-03 (BUG-70, round 5): was toContain('Dozing') and
+    // toContain(LAUNCHER_PACKAGE) anywhere in the job log, which the screen's
+    // lines made vacuous; now the evidence's own lines.
+    expect(
+      saysEvidence(stdout, 'call-without-permission.yaml', "phone's wakefulness", 'Dozing'),
+      output,
+    ).toBe(true);
+    expect(
+      saysEvidence(
+        stdout,
+        'call-without-permission.yaml',
+        "focused window's package",
+        literally(LAUNCHER_PACKAGE),
+      ),
+      output,
+    ).toBe(true);
     expect(code, output).not.toBe(0);
     expect(code, 'it was killed rather than finishing').not.toBeNull();
   });
+});
+
+// BUG-70 (CI run 40469535686, job 122073049491, on 00542de, 2026-10-27):
+// first-contact.yaml failed at its first step after launchApp, "Assertion is
+// false: id: trygghverdag-call-button is visible", and the evidence this
+// script prints said the phone was Awake with the app's package focused, and
+// no crash lines. The app shows the call button as soon as its session leaves
+// 'starting' (the secure-storage reads), whatever the network does; while
+// 'starting' it shows the waiting indicator (grp.waiting), and with no
+// credential the join screen (grp.join.*). Which screen it showed, the job log
+// cannot say, and Maestro's debug output cannot be read from a session.
+//
+// So (the main session's design under D-031): whenever a Maestro run fails,
+// the first run or a scripted flow, the script reads the screen right after
+// Maestro exits, before any other step touches the phone, with `adb -s
+// <serial> shell uiautomator dump /data/local/tmp/trygghverdag-screen.xml`
+// then `adb -s <serial> shell cat` of that file, and prints
+// lib/screen-dump.mjs's readScreen lines under a heading that names the flow,
+// or the first run, and says only translation keys and ids are shown. Best
+// effort, as the evidence above is: an adb step that fails, or output
+// readScreen refuses, is one line saying the screen is unread and why, never
+// the dump's text, and the run still fails with Maestro's reason. A passing
+// run never dumps the screen.
+//
+// Round 2 of the red step (the main session's answers, D-031): an exact
+// match wins, so 112's label is call.emergency.label alone (the reader's tests
+// pin the rule); and a stale dump must never name a screen. A file an earlier
+// run left at that path would be printed as this run's screen if a dump that
+// wrote nothing were followed by cat, so only a dump whose output holds
+// uiautomator's own "dumped to: <path>" line is read, even one that exits 0;
+// otherwise the unread line names the dump step and says it did not say it
+// wrote the file, and nothing is cat. And the file is removed right after it
+// is read, best effort, with `adb -s <serial> shell rm -f` of that path, also
+// when readScreen refuses what cat printed; a refused rm changes nothing in
+// the run's outcome.
+
+/** The app's Android application ID, which the script reads from app.config.ts and hands Maestro. */
+const APP_ID = 'no.trygghverdag.placeholder';
+
+/** The app's bokmål translations, as the script reads them. */
+const NB = JSON.parse(
+  readFileSync(path.join(REPO, APP, 'src/shared/translations/nb.json'), 'utf8'),
+);
+
+/** A button's ID as the app's source holds it: React Native's testID, Android's resource-id. */
+function buttonIdIn(file, name) {
+  const source = readFileSync(path.join(REPO, APP, 'src/features/call', file), 'utf8');
+  const found = new RegExp(`\\bconst ${name} = '([^']+)';`).exec(source)?.[1];
+  if (found === undefined) {
+    throw new Error(`${name} is no longer a string constant in ${file}: the screens here need it`);
+  }
+  return found;
+}
+
+const EMERGENCY_BUTTON_ID = buttonIdIn('emergency-bar.tsx', 'EMERGENCY_BUTTON_ID');
+const CALL_BUTTON_ID = buttonIdIn('call-button.tsx', 'CALL_BUTTON_ID');
+
+/** `value` with each `{{name}}` filled with `name`, as i18next fills it. */
+const filledIn = (value, name) => value.replaceAll(/\{\{\w+\}\}/g, name);
+
+/** A number as a screen reader is given it: each character apart (the app's spelledNumber). */
+const spelledOut = (number) => Array.from(number).join(' ');
+
+/** A call to adb that dumps the screen. */
+const isScreenDump = (call) => /^adb\b.*\buiautomator\b/.test(call);
+
+/** The app's window, as uiautomator dumps it, with the 112 bar and then `content`; {APP} is the application ID. */
+const appWindowWith = (...content) =>
+  appWindowNode([
+    buttonNode({ id: EMERGENCY_BUTTON_ID, label: NB.call.emergency.label, texts: ['112'] }),
+    ...content,
+  ]);
+
+/**
+ * The lines readScreen gives for what every screen of the app starts with:
+ * Android's content frame, and the 112 bar. Round 2 (RG-03 in the commit):
+ * 112's label was `call.emergency.label or call.button.call`, set before the
+ * rule that an exact match wins.
+ */
+const SCREEN_START_LINES = [
+  `${APP_ID}: id android:id/content; text: none; label: none`,
+  `${APP_ID}: id ${EMERGENCY_BUTTON_ID}; text: none; label: call.emergency.label`,
+  `${APP_ID}: id none; text: other text (3 characters); label: none`,
+];
+
+/** The waiting indicator, the screen while the app reads secure storage, and its lines. */
+const WAITING_SCREEN = hierarchyDump('{APP}', [appWindowWith(progressNode(NB.grp.waiting))]);
+const WAITING_LINES = [...SCREEN_START_LINES, `${APP_ID}: id none; text: none; label: grp.waiting`];
+
+/** The join screen as wrong-code.yaml leaves it, with what that flow types, and its lines. */
+const JOIN_SCREEN = hierarchyDump('{APP}', [
+  appWindowWith(
+    textNode(NB.grp.join.title),
+    textNode(NB.grp.join.intro),
+    textNode(NB.grp.join.codeLabel),
+    editTextNode(NB.grp.join.codeLabel, 'ZZZZZ-ZZZZZ-ZZZZZ-ZZZZZ'),
+    textNode(NB.grp.join.nameLabel),
+    editTextNode(NB.grp.join.nameLabel, 'Testmedlem Emulator'),
+    buttonNode({ label: NB.grp.join.submit, texts: [NB.grp.join.submit] }),
+    textNode(NB.grp.join.notValid),
+  ),
+]);
+const JOIN_LINES = [
+  ...SCREEN_START_LINES,
+  `${APP_ID}: id none; text: grp.join.title; label: none`,
+  `${APP_ID}: id none; text: grp.join.intro; label: none`,
+  `${APP_ID}: id none; text: grp.join.codeLabel; label: none`,
+  `${APP_ID}: id none; text: other text (23 characters); label: grp.join.codeLabel`,
+  `${APP_ID}: id none; text: grp.join.nameLabel; label: none`,
+  `${APP_ID}: id none; text: other text (19 characters); label: grp.join.nameLabel`,
+  `${APP_ID}: id none; text: none; label: grp.join.submit`,
+  `${APP_ID}: id none; text: grp.join.submit; label: none`,
+  `${APP_ID}: id none; text: grp.join.notValid; label: none`,
+];
+
+/**
+ * PRIV-07: the home screen after a call to #1 could not start, #1's number in
+ * a text and spelled in labels, with a missed call from another of the test
+ * kit's numbers (MOBILE, which the script is never given) in System UI.
+ */
+const NUMBERED_SCREEN = hierarchyDump('{APP}', [
+  appWindowWith(
+    textNode(filledIn(NB.grp.firstContact.shown, EMULATOR_FIRST_CONTACT.name)),
+    textNode(EMULATOR_FIRST_CONTACT.normalised, spelledOut(EMULATOR_FIRST_CONTACT.normalised)),
+    buttonNode({
+      id: CALL_BUTTON_ID,
+      label: filledIn(NB.call.button.call, EMULATOR_FIRST_CONTACT.name),
+      texts: [filledIn(NB.call.button.call, EMULATOR_FIRST_CONTACT.name)],
+    }),
+    textNode(
+      filledIn(NB.call.button.failed, EMULATOR_FIRST_CONTACT.normalised),
+      filledIn(NB.call.button.failed, spelledOut(EMULATOR_FIRST_CONTACT.normalised)),
+    ),
+  ),
+  {
+    package: 'com.android.systemui',
+    resourceId: 'com.android.systemui:id/notification_stack_scroller',
+    children: [
+      { className: 'android.widget.TextView', resourceId: 'android:id/title', text: 'Tapt anrop' },
+      { className: 'android.widget.TextView', resourceId: 'android:id/text', text: MOBILE },
+    ],
+  },
+]);
+
+/** first-contact.yaml failing in Maestro, on the screen given. */
+const FIRST_CONTACT_FAILS_ON = (screen) => ({
+  'first-contact': { focus: 'app', status: 'ERROR', screen },
+});
+
+/** The index in `lines` of the heading over the screen's lines: it names `who`, and says only translation keys and ids are shown. */
+const screenHeading = (lines, who) =>
+  lines.findIndex(
+    (line) =>
+      who.test(line) &&
+      /\bscreen\b/i.test(line) &&
+      /\bonly\b/i.test(line) &&
+      /\btranslation keys?\b/i.test(line) &&
+      /\bids?\b/i.test(line),
+  );
+
+/** Which of `expected` are not in `lines`, in that order, after the line at `from`. */
+function missingInOrder(lines, expected, from) {
+  let at = from;
+  return expected.filter((wanted) => {
+    const found = lines.findIndex((line, i) => i > at && line.includes(wanted));
+    if (found === -1) return true;
+    at = found;
+    return false;
+  });
+}
+
+/**
+ * The adb steps that read the screen and then remove the file, as the
+ * stand-in adb logs them. Round 2: the rm was added.
+ */
+const SCREEN_READ = [
+  `adb -s emulator-5554 shell uiautomator dump ${SCREEN_DUMP_PATH}`,
+  `adb -s emulator-5554 shell cat ${SCREEN_DUMP_PATH}`,
+  `adb -s emulator-5554 shell rm -f ${SCREEN_DUMP_PATH}`,
+];
+
+/** A call to adb that prints, or removes, the file the screen is dumped to. */
+const catsScreenFile = (call) => call.endsWith(`shell cat ${SCREEN_DUMP_PATH}`);
+const removesScreenFile = (call) => call.endsWith(`shell rm -f ${SCREEN_DUMP_PATH}`);
+
+/** The lines of `output` that say the screen is unread. */
+const screenUnread = (output) =>
+  output.split('\n').filter((line) => /\bscreen\b/i.test(line) && UNREAD.test(line));
+
+/** The run's failure as stop() writes it: from the line naming the flow and Maestro's reason to the end. */
+function failureTail(stderr) {
+  const at = stderr.search(/^.*\bthe flow failed in Maestro\b/m);
+  return at === -1 ? '' : stderr.slice(at);
+}
+
+/**
+ * Where the file the screen was read from ends up, by what cat printed. Kept
+ * out of the test.each call, as REPORT_PROBLEMS is.
+ */
+const SCREEN_FILE_REMOVALS = [
+  { what: 'readScreen reads what cat printed', screen: WAITING_SCREEN },
+  { what: 'readScreen refuses what cat printed', screen: `Uleselig skjerm ${MOBILE}` },
+];
+
+/**
+ * The runs whose Maestro run fails, for the order of the steps after it. Kept
+ * out of the test.each call, as REPORT_PROBLEMS is.
+ */
+const FAILED_MAESTRO_RUNS = [
+  {
+    what: 'a scripted flow, first-contact.yaml,',
+    run: () => runScripted({ effects: FIRST_CONTACT_FAILS_ON(WAITING_SCREEN) }),
+  },
+  {
+    what: 'the first run',
+    run: () =>
+      runPastPreflight({
+        flows: [
+          ['app-starts', 'SUCCESS'],
+          ['wrong-code', 'ERROR'],
+        ],
+        maestroExit: 1,
+        firstRunScreen: JOIN_SCREEN,
+      }),
+  },
+];
+
+/** The first run, failing in Maestro on the join screen, with what the stand-in emulator `refuse`s. */
+const firstRunFails = (refuse) =>
+  runPastPreflight({
+    flows: [
+      ['app-starts', 'SUCCESS'],
+      ['wrong-code', 'ERROR'],
+    ],
+    maestroExit: 1,
+    firstRunScreen: JOIN_SCREEN,
+    refuse,
+  });
+
+/** The index in `lines` of the line that says the screen `who` failed on is unread. */
+const unreadLine = (lines, who) =>
+  lines.findIndex((line) => who.test(line) && /\bscreen\b/i.test(line) && UNREAD.test(line));
+
+/**
+ * Round 4 (safety-reviewer): runs whose Maestro run fails, the screen then
+ * read or its dump refused; who failed; where the screen's part of the job log
+ * starts; and the final message stop() writes, as it was before round 4. Kept
+ * out of the test.each call, as REPORT_PROBLEMS is.
+ */
+const REASON_BEFORE_SCREEN = [
+  {
+    what: 'a scripted flow, first-contact.yaml, fails and the screen is read',
+    run: () => runScripted({ effects: FIRST_CONTACT_FAILS_ON(WAITING_SCREEN) }),
+    who: /\bfirst-contact\b/,
+    screenPart: screenHeading,
+    final:
+      'e2e:android: first-contact.yaml: the flow failed in Maestro: Maestro exited with code 1, and its report says: ',
+  },
+  {
+    what: 'a scripted flow, first-contact.yaml, fails and the dump is refused',
+    run: () =>
+      runScripted({ effects: FIRST_CONTACT_FAILS_ON(WAITING_SCREEN), refuse: 'screenDump' }),
+    who: /\bfirst-contact\b/,
+    screenPart: unreadLine,
+    final:
+      'e2e:android: first-contact.yaml: the flow failed in Maestro: Maestro exited with code 1, and its report says: ',
+  },
+  {
+    what: 'the first run fails and the screen is read',
+    run: () => firstRunFails(undefined),
+    who: /\bfirst run\b/i,
+    screenPart: screenHeading,
+    final: 'e2e:android: Maestro exited with code 1, and its report says: ',
+  },
+  {
+    what: 'the first run fails and the dump is refused',
+    run: () => firstRunFails('screenDump'),
+    who: /\bfirst run\b/i,
+    screenPart: unreadLine,
+    final: 'e2e:android: Maestro exited with code 1, and its report says: ',
+  },
+];
+
+describe('BUG-70: when a Maestro run fails, the job log names the screen it failed on, by translation keys and ids only', () => {
+  test('BUG-70: the screens here are the app’s: the call button’s and 112’s IDs are read from its source, and the call button’s is the one first-contact.yaml waits for', () => {
+    const flow = readFileSync(path.join(REPO, APP, 'e2e', 'first-contact.yaml'), 'utf8');
+
+    expect(CALL_BUTTON_ID).toBe('trygghverdag-call-button');
+    expect(flow).toContain(`id: ${CALL_BUTTON_ID}`);
+    expect(EMERGENCY_BUTTON_ID).toMatch(/^trygghverdag-/);
+    expect(EMERGENCY_BUTTON_ID).not.toBe(CALL_BUTTON_ID);
+  });
+
+  test('BUG-70: when first-contact.yaml fails in Maestro on the waiting indicator, the job log has a heading naming the flow and saying only translation keys and ids are shown, then the screen’s lines, grp.waiting among them; and the run fails with Maestro’s reason', async () => {
+    const { code, stderr, output, invocations } = await runScripted({
+      effects: FIRST_CONTACT_FAILS_ON(WAITING_SCREEN),
+    });
+    const lines = output.split('\n');
+    const heading = screenHeading(lines, /\bfirst-contact\b/);
+
+    // Not vacuous: the application ID the lines name is the one Maestro was given.
+    expect(invocations[0]?.args, output).toContain(`APP_ID=${APP_ID}`);
+    expect(heading, output).toBeGreaterThan(-1);
+    expect(missingInOrder(lines, WAITING_LINES, heading), output).toEqual([]);
+    expect(code, output).toBe(1);
+    expect(stderr, output).toContain('first-contact');
+    expect(stderr, output).toMatch(/\bMaestro exited with code 1\b/);
+  });
+
+  test('BUG-70: when the first run fails in Maestro on the join screen, the job log has a heading naming the first run and saying only translation keys and ids are shown, then the join screen’s lines; and the run fails with Maestro’s reason', async () => {
+    const { code, stderr, output } = await runPastPreflight({
+      flows: [
+        ['app-starts', 'SUCCESS'],
+        ['wrong-code', 'ERROR'],
+      ],
+      maestroExit: 1,
+      firstRunScreen: JOIN_SCREEN,
+    });
+    const lines = output.split('\n');
+    const heading = screenHeading(lines, /\bfirst run\b/i);
+
+    expect(heading, output).toBeGreaterThan(-1);
+    expect(missingInOrder(lines, JOIN_LINES, heading), output).toEqual([]);
+    expect(code, output).toBe(1);
+    expect(stderr, output).toMatch(/\bMaestro exited with code 1\b/);
+  });
+
+  test.each(FAILED_MAESTRO_RUNS)(
+    'BUG-70: when $what fails in Maestro, the screen is read right after: the next three adb steps are uiautomator dump to /data/local/tmp/trygghverdag-screen.xml, cat of it and rm -f of it, before any wake, key, font size, dumpsys or logcat, and only once',
+    async ({ run }) => {
+      const { output, calls } = await run();
+      const failed = calls.findLastIndex(isFlowRun);
+      const next = calls.slice(failed + 1).filter((call) => call.startsWith('adb'));
+
+      expect(failed, output).toBeGreaterThan(-1);
+      // Round 2: was the first two, the dump and the cat; the rm is added.
+      expect(next.slice(0, 3), output).toEqual(SCREEN_READ);
+      expect(calls.filter(isScreenDump), output).toHaveLength(1);
+    },
+  );
+
+  test('BUG-70: when uiautomator cannot dump the screen, one line says the screen is unread, naming the step and its exit code, no screen line is printed, and the run still fails with Maestro’s reason, the font size reset', async () => {
+    const { code, stderr, output, calls, fontScaleAtEnd } = await runScripted({
+      effects: FIRST_CONTACT_FAILS_ON(WAITING_SCREEN),
+      refuse: 'screenDump',
+    });
+    const unread = output
+      .split('\n')
+      .filter((line) => /\bscreen\b/i.test(line) && UNREAD.test(line));
+
+    // Not vacuous: it tried.
+    expect(calls.filter(isScreenDump), output).toHaveLength(1);
+    expect(unread, output).toHaveLength(1);
+    expect(unread[0], output).toMatch(/\buiautomator dump\b/);
+    expect(unread[0], output).toMatch(/\bexit code 1\b/);
+    expect(output).not.toContain('grp.waiting');
+    expect(code, output).toBe(1);
+    expect(stderr, output).toContain('first-contact');
+    expect(stderr, output).toMatch(/\bMaestro exited with code 1\b/);
+    expect(Number(fontScaleAtEnd), output).toBe(1);
+  });
+
+  test('BUG-70 and PRIV-07: when what uiautomator wrote is not a hierarchy, one line says the screen is unread, never repeating that text or a number in it, and the run still fails with Maestro’s reason', async () => {
+    const unreadable = `Uleselig skjerm ${MOBILE}`;
+    const { code, stderr, output, screenDumped } = await runScripted({
+      effects: FIRST_CONTACT_FAILS_ON(unreadable),
+    });
+    const unread = output
+      .split('\n')
+      .filter((line) => /\bscreen\b/i.test(line) && UNREAD.test(line));
+
+    // Not vacuous: that is what the device's file held.
+    expect(screenDumped, output).toBe(unreadable);
+    expect(unread, output).toHaveLength(1);
+    expect(output).not.toContain('Uleselig');
+    expect(numberLeaks(output), output).toEqual([]);
+    expect(code, output).toBe(1);
+    expect(stderr, output).toContain('first-contact');
+    expect(stderr, output).toMatch(/\bMaestro exited with code 1\b/);
+  });
+
+  test('BUG-70: a run in which every Maestro run passes never dumps the screen', async () => {
+    const { code, output, calls } = await runScripted();
+
+    expect(code, output).toBe(0);
+    expect(calls.filter(isScreenDump), output).toEqual([]);
+    expect(
+      calls.filter((call) => call.includes(SCREEN_DUMP_PATH)),
+      output,
+    ).toEqual([]);
+  });
+
+  test('BUG-70 and PRIV-07: with #1’s number in a text and spelled in labels on the screen a flow failed on, and another number in System UI, the screen’s lines are printed and no number, nor six of its digits, appears in the job log', async () => {
+    const { code, output, screenDumped } = await runScripted({
+      unmasked: true,
+      effects: {
+        'call-with-permission': { focus: 'app', status: 'ERROR', screen: NUMBERED_SCREEN },
+      },
+    });
+
+    // Not vacuous: the device's file held both numbers, whole and spelled.
+    expect(screenDumped).toContain(EMULATOR_FIRST_CONTACT.normalised);
+    expect(screenDumped).toContain(spelledOut(EMULATOR_FIRST_CONTACT.normalised));
+    expect(screenDumped).toContain(MOBILE);
+    // And the screen was read and printed.
+    expect(output).toContain(
+      `${APP_ID}: id ${CALL_BUTTON_ID}; text: none; label: call.button.call`,
+    );
+    expect(output).toContain(
+      `${APP_ID}: id none; text: call.button.failed; label: call.button.failed`,
+    );
+    expect(output).toContain('com.android.systemui: id android:id/text');
+    expect(numberLeaks(output), output).toEqual([]);
+    expect(code, output).toBe(1);
+  });
+
+  // Round 2 (the main session's answer): a stale dump must never name a
+  // screen. uiautomator's null-root answer is remembered from AOSP's
+  // DumpCommand, not captured from CI (worldAnswers).
+  test('BUG-70: when uiautomator exits 0 but does not say it wrote the file, as AOSP’s does with no window to read, the file an earlier run left there is never read: no cat, no screen line, and one line saying the screen is unread, naming the dump step and saying it did not say it wrote the file; the run still fails with Maestro’s reason', async () => {
+    const stale = JOIN_SCREEN.replaceAll('{APP}', APP_ID);
+    const { code, stderr, output, calls, screenDumped, screenFileAtEnd } = await runScripted({
+      effects: FIRST_CONTACT_FAILS_ON(WAITING_SCREEN),
+      refuse: 'screenNullRoot',
+      staleScreen: stale,
+    });
+    const unread = screenUnread(output);
+
+    // Not vacuous: it tried; uiautomator wrote nothing; and the file left
+    // there held a screen of the app to name, still there to be read.
+    expect(calls.filter(isScreenDump), output).toHaveLength(1);
+    expect(screenDumped, output).toBe('');
+    expect(stale).toContain(NB.grp.join.title);
+    expect(screenFileAtEnd, output).toBe(stale);
+    expect(calls.filter(catsScreenFile), output).toEqual([]);
+    expect(output).not.toContain(`${APP_ID}: id `);
+    expect(output).not.toMatch(/\bgrp\.(?:join|waiting)\b/);
+    expect(unread, output).toHaveLength(1);
+    expect(unread[0], output).toMatch(/\buiautomator dump\b/);
+    expect(unread[0], output).toMatch(/\bdid(?: not|n['’]t) say\b[^\n]*\bwr(?:ote|itten)\b/i);
+    expect(code, output).toBe(1);
+    expect(stderr, output).toContain('first-contact');
+    expect(stderr, output).toMatch(/\bMaestro exited with code 1\b/);
+  });
+
+  test.each(SCREEN_FILE_REMOVALS)(
+    'BUG-70: when $what, the file is removed from the device right after the cat, with rm -f, once, and is gone at the end',
+    async ({ screen }) => {
+      const { output, calls, screenDumped, screenFileAtEnd } = await runScripted({
+        effects: FIRST_CONTACT_FAILS_ON(screen),
+      });
+      const adb = calls.filter((call) => call.startsWith('adb'));
+      const cat = adb.findIndex(catsScreenFile);
+
+      // Not vacuous: the dump wrote the file, and cat printed it.
+      expect(screenDumped, output).toBe(screen.replaceAll('{APP}', APP_ID));
+      expect(cat, output).toBeGreaterThan(-1);
+      expect(adb[cat + 1], output).toBe(`adb -s emulator-5554 shell rm -f ${SCREEN_DUMP_PATH}`);
+      expect(calls.filter(removesScreenFile), output).toHaveLength(1);
+      expect(screenFileAtEnd, output).toBeNull();
+    },
+  );
+
+  test('BUG-70: when the rm is refused, nothing in the run’s outcome changes: the screen’s lines are still printed, and the run fails with the same exit code and the same failure, word for word, as when the rm works, the font size reset', async () => {
+    const removed = await runScripted({ effects: FIRST_CONTACT_FAILS_ON(WAITING_SCREEN) });
+    const refused = await runScripted({
+      effects: FIRST_CONTACT_FAILS_ON(WAITING_SCREEN),
+      refuse: 'screenRemove',
+    });
+    const lines = refused.output.split('\n');
+    const heading = screenHeading(lines, /\bfirst-contact\b/);
+
+    // Not vacuous: the rm was tried and refused, and the file stayed.
+    expect(refused.calls.filter(removesScreenFile), refused.output).toHaveLength(1);
+    expect(refused.screenFileAtEnd, refused.output).not.toBeNull();
+    expect(heading, refused.output).toBeGreaterThan(-1);
+    expect(missingInOrder(lines, WAITING_LINES, heading), refused.output).toEqual([]);
+    expect(failureTail(refused.stderr), refused.output).not.toBe('');
+    expect(failureTail(refused.stderr), refused.output).toBe(failureTail(removed.stderr));
+    expect([refused.code, removed.code], refused.output).toEqual([1, 1]);
+    expect(Number(refused.fontScaleAtEnd), refused.output).toBe(1);
+  });
+
+  // Round 4 (safety-reviewer S1): a cat that fails, after a dump that said it
+  // wrote the file, is one unread line naming the cat and its exit code; the
+  // file is still removed.
+  test('BUG-70: when cat of the dump fails, one line says the screen is unread, naming the cat and its exit code, never what adb printed; no screen line is printed; the rm -f still runs right after the cat; and the run fails with Maestro’s reason, as when the screen is read', async () => {
+    const { code, stderr, output, calls, screenDumped, screenFileAtEnd } = await runScripted({
+      effects: FIRST_CONTACT_FAILS_ON(WAITING_SCREEN),
+      refuse: 'screenCat',
+    });
+    const adb = calls.filter((call) => call.startsWith('adb'));
+    const cat = adb.findIndex(catsScreenFile);
+    const unread = screenUnread(output);
+
+    // Not vacuous: the dump wrote the file and said so, and cat was tried.
+    expect(screenDumped, output).toBe(WAITING_SCREEN.replaceAll('{APP}', APP_ID));
+    expect(cat, output).toBeGreaterThan(-1);
+    expect(unread, output).toHaveLength(1);
+    expect(unread[0], output).toMatch(/\bcat\b/);
+    expect(unread[0], output).toMatch(/\bexit code 1\b/);
+    expect(output).not.toContain('Input/output error');
+    expect(output).not.toContain(`${APP_ID}: id `);
+    expect(screenHeading(output.split('\n'), /\bfirst-contact\b/), output).toBe(-1);
+    expect(adb[cat + 1], output).toBe(`adb -s emulator-5554 shell rm -f ${SCREEN_DUMP_PATH}`);
+    expect(screenFileAtEnd, output).toBeNull();
+    expect(code, output).toBe(1);
+    expect(stderr, output).toContain('first-contact');
+    expect(stderr, output).toMatch(/\bMaestro exited with code 1\b/);
+  });
+
+  // Round 4 (safety-reviewer S2): the screen's three adb calls can take
+  // minutes before stop() prints Maestro's reason, and CI's step can be killed
+  // first. So Maestro's reason is in the job log before the screen is read: a
+  // line on stdout naming who failed and Maestro's exit, in the words the
+  // final message uses, saying the screen is read next. The shorter limit the
+  // three calls get is not tested here: a real wait would slow the suite.
+  test.each(REASON_BEFORE_SCREEN)(
+    'BUG-70: when $what, a stdout line naming who failed, saying Maestro exited with code 1 and that the screen is read next, comes before the screen’s part of the job log; the final message is as it was',
+    async ({ run, who, screenPart, final }) => {
+      const { code, stdout, stderr, output } = await run();
+      const lines = stdout.split('\n');
+      const reason = lines.findIndex(
+        (line) =>
+          who.test(line) && /\bMaestro exited with code 1\b/.test(line) && /\bscreen\b/i.test(line),
+      );
+      const screen = screenPart(lines, who);
+
+      // Not vacuous: the screen's part is there, on stdout.
+      expect(screen, output).toBeGreaterThan(-1);
+      expect(reason, output).toBeGreaterThan(-1);
+      expect(reason, output).toBeLessThan(screen);
+      expect(stderr, output).toContain(final);
+      expect(code, output).toBe(1);
+    },
+  );
 });
 
 // CALL-01, approach 9 (review loop 1, code-reviewer 2): e2e-android.mjs
