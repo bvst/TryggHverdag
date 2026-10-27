@@ -1265,10 +1265,10 @@ function linkModules(from, to) {
 }
 
 /**
- * Runs `command` the way a package.json script runs it, node_modules/.bin
- * first on PATH and the line handed to sh, in a scratch copy of the runner's
- * folder: its configuration files as they are, node_modules linked, and the
- * failing sample where that configuration collects tests.
+ * Runs `command` the way a package.json script runs it, the package's own
+ * node_modules/.bin first on PATH and the line handed to sh, in a scratch copy
+ * of the runner's folder: its configuration files as they are, node_modules
+ * linked, and the failing sample where that configuration collects tests.
  */
 function runRunner(runner, command = runner.command) {
   const dir = scratch(`ci03-${runner.name}`);
@@ -1280,7 +1280,20 @@ function runRunner(runner, command = runner.command) {
   linkModules(path.join(from, 'node_modules'), path.join(dir, 'node_modules'));
   writeFiles(dir, { [runner.sample.file]: runner.sample.text });
   const env = drillEnv({ TMPDIR: scratch('ci03-tmp') });
-  env.PATH = `${path.join(dir, 'node_modules', '.bin')}${path.delimiter}${env.PATH}`;
+  // RG-03 (BUG-68): this put the scratch folder's node_modules/.bin on PATH,
+  // a symlink to the package's. pnpm puts a package's own node_modules/.bin
+  // on PATH when it runs a script, and a pnpm shim finds its target from
+  // where it was called ($basedir): through the symlink, that was the scratch
+  // folder. An install with --ignore-scripts, which CI's installs now use,
+  // leaves shims that reach the store by a path relative to the real .bin
+  // (`$basedir/../../../../node_modules/.pnpm/jest@…`), so from the scratch
+  // folder jest was "Cannot find module '/node_modules/.pnpm/…'"; only the
+  // shims an install without the flag rewrites (`$basedir/../jest/…`)
+  // worked from there. Now the runner is found where pnpm finds it, as
+  // test:unit runs it. The assertions are unchanged: the failing sample must
+  // still turn the runner red in its own summary, with its passing neighbour
+  // as the control, and the stand-ins must still not pass for it.
+  env.PATH = `${path.join(from, 'node_modules', '.bin')}${path.delimiter}${env.PATH}`;
   return spawnGate(['sh', '-c', command], { cwd: dir, env });
 }
 
