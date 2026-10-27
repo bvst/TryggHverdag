@@ -83,10 +83,10 @@ as its own pull request. **BUG-68's `ci.yml` part is fixed in the pull request a
 check): `--ignore-scripts` on the ten installs in `ci.yml`, with `test-author`'s tests
 (`576efa4`) and a change to the CI-03 drill that the flag made necessary (`753553e`; it
 also explains the old jest-expo drill failure in `progress/m2.md`), the fix in `258941a`;
-CI on that branch is the first real check of a flagged install. `ai-review.yml:180`'s install
+CI on `db75070` passed every check, `android-e2e` included, the first full run of a flagged install. `ai-review.yml:180`'s install
 goes in a separate batch with Dependabot #102, a hand merge under D-075 (that batch must get opened);
-`daily-status.yml:81` is out of scope, since it runs `main`'s reviewed code on a schedule (add the flag the next time
-that file is touched).
+`daily-status.yml:81` is out of scope for #106: it runs on a schedule and by hand (`workflow_dispatch`, with the Claude secrets),
+so it is not only `main`'s reviewed code, and it gets the flag the next time that file is touched.
 Queued for the owner to schedule: BUG-13 (`gate:full` miscounts the steps that
 did not run after a failure), BUG-16 (`req:coverage` counts an ID named in a
 comment), BUG-19 (no test checks every owner-approval path keeps its owners),
