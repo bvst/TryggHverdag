@@ -323,11 +323,11 @@ function screenNow() {
 function printScreen(who) {
   const { lines, unread } = screenNow();
   if (lines === undefined) {
-    process.stdout.write(`e2e:android: ${who} failed. The screen then: unread: ${unread}.\n`);
+    process.stdout.write(`e2e:android: ${who}: the screen then: unread: ${unread}.\n`);
     return;
   }
   process.stdout.write(
-    `e2e:android: ${who} failed. The screen then, by translation keys and ids only:\n` +
+    `e2e:android: ${who}: the screen then, by translation keys and ids only:\n` +
       lines.map((line) => `  ${line}\n`).join(''),
   );
 }
