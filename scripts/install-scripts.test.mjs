@@ -1,48 +1,67 @@
 /**
- * BUG-68: CI's installs run no install script.
+ * BUG-68: no workflow's install runs an install script.
  *
- * Every job in ci.yml that runs a check after an install runs
- * `pnpm install --frozen-lockfile` first. pnpm 10.33.0 runs each workspace
- * project's own install scripts during that install, the root's included. A
- * script there runs with the job's checkout and environment before the job's
- * checks: it can rewrite the root .npmrc (BUG-66's route to a silent audit),
- * write to `$GITHUB_ENV`, or change the shell every later `pnpm run` gets
- * (BUG-69's route). The checks of the checked-in files never see what it did.
- * Reproduced in a minimal pnpm 10.33.0 workspace: a workspace package's
- * `postinstall` ran during `pnpm install --frozen-lockfile`, and with
- * `--ignore-scripts` it did not. #105 made all five workspace package.json
- * files owned (D-144) and named the five packages in pnpm-workspace.yaml, so
- * adding a script needs the owner's review. This is CI's own defence, and
- * privacy-security-reviewer's S1 on #105 asked for it on every install before
- * a required check, not on the `security` job's alone.
+ * Every workflow job that runs a check, or hands a step a secret, after an
+ * install runs `pnpm install --frozen-lockfile` first. pnpm 10.33.0 runs each
+ * workspace project's own install scripts during that install, the root's
+ * included. A script there runs with the job's checkout and environment
+ * before the job's later steps: it can rewrite the root .npmrc (BUG-66's
+ * route to a silent audit), write to `$GITHUB_ENV`, or change the shell every
+ * later `pnpm run` gets (BUG-69's route). The checks of the checked-in files
+ * never see what it did. Reproduced in a minimal pnpm 10.33.0 workspace: a
+ * workspace package's `postinstall` ran during
+ * `pnpm install --frozen-lockfile`, and with `--ignore-scripts` it did not.
+ * #105 made all five workspace package.json files owned (D-144) and named the
+ * five packages in pnpm-workspace.yaml, so adding a script needs the owner's
+ * review. This is CI's own defence, and privacy-security-reviewer's S1 on
+ * #105 asked for it on every install before a required check, not on the
+ * `security` job's alone. #106 put it on ci.yml's installs, and BUG-68's
+ * second part on every workflow's, one added later included: ai-review.yml's
+ * `review` job and daily-status.yml's `report` job install just before the
+ * step given the Claude secrets. The flag stops install scripts only. A run
+ * on a branch still gives that branch's code the secrets in other ways: its
+ * root .pnpmfile.cjs (below), and in a manual run its Claude config and the
+ * scripts the job runs. This adds no exposure beyond write access itself:
+ * anyone who can push a branch can already reach repository secrets with a
+ * new workflow file.
  *
  * Test names carry no <ID>-ACn: prefix: a bug's tests are named BUG-<n>, and
  * BUG- is not a requirement prefix req:coverage collects.
  *
  * Pinned:
  *   - every `pnpm install` (or `pnpm i`, `pnpm add`, `pnpm install-test`,
- *     `pnpm it`) in ci.yml carries `--ignore-scripts` on that same command,
- *     spelled that way, with no `false` after it and no other spelling of the
- *     setting beside it. pnpm is pnpm however it is called: a path to it,
+ *     `pnpm it`) in every workflow carries `--ignore-scripts` on that same
+ *     command, spelled that way, with no `false` after it and no other
+ *     spelling of the setting beside it. Every file in .github/workflows whose
+ *     name ends in `.yml` or `.yaml`, in any case, is read (`workflowsIn`);
+ *     the tests name the files they read, and refuse a reading of none, or
+ *     one without ci.yml, ai-review.yml and daily-status.yml
+ *     (`NAMED_WORKFLOWS`). ci.yml's own tests stay beside the every-workflow
+ *     ones. pnpm is pnpm however it is called: a path to it,
  *     `pnpm@<version>`, its `pnpm.cjs`, and behind `npx`, `corepack`,
- *     `pnpm dlx` or `node` (`PNPM_WORD`). ci.yml is read as GitHub decodes
- *     it, every string in it and not only `run:` (android-emulator-runner's
- *     `with: script:` is a shell command too), and each string as a rough
- *     shell reading splits it: a comment dropped from a `#` that starts a word
- *     outside quotes, lines joined at a trailing backslash, commands split at
+ *     `pnpm dlx` or `node` (`PNPM_WORD`). Each workflow is read as GitHub
+ *     decodes it, every string in it and not only `run:`
+ *     (android-emulator-runner's `with: script:` is a shell command too), and
+ *     each string as a rough shell reading splits it: a comment dropped from a
+ *     `#` that starts a word outside quotes (so `$#`, a shell parameter, is
+ *     no comment), lines joined at a trailing backslash, commands split at
  *     `;`, `&`, `|`, `&&`, `||`, parentheses, backticks, `<` and `>`, and a
  *     `${{ … }}` expression read as one word, which GitHub fills in before the
  *     shell runs. It is not a shell: what it does not split on, or a command
  *     the shell assembles, it does not see (below);
- *   - a second, plain reading of ci.yml's lines, with no YAML parser and its
- *     own cruder comment rule, finds as many lines that say `pnpm install` or
- *     `pnpm i` as the decoded reading finds installs, and each is a line the
- *     decoded reading found. That catches a part of the file the YAML walk
- *     misses, or a reading that finds nothing; the two share the separators,
- *     so a form neither splits on is missed by both;
- *   - no pnpm/action-setup step in ci.yml sets `run_install` to anything but
- *     `false` (privacy-security-reviewer's N2 on #106): the action can run
- *     `pnpm install` itself, with scripts on (`actionSetupSteps`);
+ *   - a second, plain reading of each workflow's lines, with no YAML parser
+ *     and its own cruder comment rule, finds as many lines that say
+ *     `pnpm install` or `pnpm i` in that file as the decoded reading finds
+ *     installs there, and each is a line the decoded reading found. That
+ *     catches a part of a file the YAML walk misses (an install GitHub writes
+ *     in from a `${{ … }}` expression is one), or a reading that finds
+ *     nothing; the two share the separators, so a form neither splits on is
+ *     missed by both;
+ *   - no pnpm/action-setup step in any workflow sets `run_install` to
+ *     anything but `false` (privacy-security-reviewer's N2 on #106): the
+ *     action can run `pnpm install` itself, with scripts on
+ *     (`actionSetupSteps`). Unset is allowed: the action's default installs
+ *     nothing. Its steps are counted the plain way too, in each file;
  *   - no workspace package's package.json (each folder pnpm-workspace.yaml
  *     names, which must be exactly `FIVE`: apps/mobile, apps/server,
  *     packages/config, packages/contracts and packages/test-kit) holds a
@@ -55,29 +74,22 @@
  *
  * The workspace and root checks run after the install they are about, so in
  * CI they are a second line: with `--ignore-scripts` nothing they refuse runs
- * in ci.yml's jobs, and without it the script has run before this file does.
- * They hold the files for every install that is not CI's: a session's, the
- * owner's Mac, and the two workflows below.
+ * in a workflow's jobs, and without it the script has run before this file
+ * does. They hold the files for every install that is not a workflow's: a
+ * session's and the owner's Mac's.
  *
  * The root's `prepare` runs `git config core.hooksPath .githooks || true`. With
  * `--ignore-scripts` CI skips it, which is fine: it only points git at the
  * repository's local hooks, which no CI job uses. It is pinned to that text
- * because it still runs on every install without the flag, two of them in CI
- * (below).
+ * because it still runs on every install without the flag: a session's and
+ * the owner's Mac's.
  *
  * Not pinned:
- *   - `.github/workflows/ai-review.yml`'s install step in the `review` job,
- *     `pnpm install --frozen-lockfile` with no `--ignore-scripts`, before the
- *     step that is given the Claude secrets (`id: review`). A change to
- *     ai-review.yml can only be merged by hand (D-075), so it goes in its own
- *     batch pull request, with Dependabot's #102. Until then the owned
- *     package.json files (D-144) and the two checks above stand in for it;
- *   - `.github/workflows/daily-status.yml`'s install step in the `report` job,
- *     the same install. It runs on a schedule, from `main`'s already-reviewed
- *     code, or when started by hand (`workflow_dispatch`); no pull request
- *     starts it;
- *   - any other workflow. deploy-staging.yml and infra-staging.yml run no
- *     `pnpm install` today, and one added there is not read here;
+ *   - a file GitHub does not run as a workflow of this repository's own: one
+ *     in a folder below .github/workflows, a composite action's action.yml,
+ *     and a reusable workflow from another repository. Only the files
+ *     directly in .github/workflows are read, and none is followed into what
+ *     it `uses:`;
  *   - pnpm commands that install under another name (`update`, `dedupe`,
  *     `remove`, `link`, `import`), `pnpm rebuild` (which runs install scripts
  *     on purpose), and installs by npm or yarn, corepack's included (corepack
@@ -86,10 +98,20 @@
  *     `$(command -v pnpm) install`, `eval`), pnpm under another file name, a
  *     here-document or a quoted string the rough reading splits wrongly, or
  *     an install a repository script or an action other than
- *     pnpm/action-setup runs for the step: only the text of ci.yml is read;
- *   - pnpm/action-setup in another workflow, a composite action or a reusable
- *     workflow that wraps it, and an `INPUT_RUN_INSTALL` environment variable
- *     (whether the runner lets one override the input was not tried);
+ *     pnpm/action-setup runs for the step: only the workflows' text is read;
+ *   - pnpm/action-setup in a composite action or a reusable workflow that
+ *     wraps it, and an `INPUT_RUN_INSTALL` environment variable (whether the
+ *     runner lets one override the input was not tried);
+ *   - a root .pnpmfile.cjs. Its hooks are not lifecycle scripts, so pnpm
+ *     10.33.0 loads it under `--ignore-scripts`, and before any install: on
+ *     any `pnpm --version`, and at setup-node's `cache: pnpm` step, which runs
+ *     `pnpm store path --silent`. In a minimal workspace on 2026-10-27 its
+ *     `updateConfig` ran on each of the three, while no `postinstall` ran.
+ *     CODEOWNERS owns `/.pnpmfile.cjs` (D-144), and `ABSENT_PNPMFILE` in
+ *     scripts/gate.test.mjs and BUG-11's test in
+ *     scripts/dependency-audit.test.mjs refuse one, but they run in ci.yml
+ *     only: a pull request that adds one has it loaded in its own ai-review
+ *     job. BUG-69's queued check before pnpm is to cover that;
  *   - `npm_config_ignore_scripts` or an .npmrc `ignore-scripts` line: neither
  *     is read. pnpm gives the command-line option precedence: in the minimal
  *     workspace on 2026-10-27, with either set to `false`,
@@ -112,6 +134,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -174,7 +197,7 @@ const ROOT_INSTALL_HOOKS = ['pnpm:devPreinstall'];
 /**
  * The root's `prepare`, as it is today. It only points git at the
  * repository's hooks; anything else here runs on every install without the
- * flag, a session's and two of CI's (the header's "Not pinned").
+ * flag, a session's and the owner's Mac's.
  */
 const ROOT_PREPARE = 'git config core.hooksPath .githooks || true';
 
@@ -207,7 +230,7 @@ function scratch() {
  * scripts/dependency-audit.test.mjs reaches it (`yamlLibrary` there, whose
  * comment says why): no workspace package depends on a YAML library, and
  * importing that test file would run its tests here too. If that peer ever
- * goes, these tests fail and say why, and nothing reads ci.yml as clean.
+ * goes, these tests fail and say why, and no workflow is read as clean.
  */
 const yamlLibrary = (() => {
   let loaded = null;
@@ -226,7 +249,7 @@ const yamlLibrary = (() => {
   };
 })();
 
-// --- ci.yml's installs --------------------------------------------------------
+// --- Reading a workflow's installs --------------------------------------------
 
 /**
  * A YAML document, parsed, with a line counter for its nodes. A document that
@@ -555,6 +578,13 @@ describe('BUG-68: every pnpm install in ci.yml runs with --ignore-scripts', () =
       // quotes, and outside quotes it escapes the quote after it.
       `          echo 'a\\' "it's #" && pnpm install --frozen-lockfile`, // 52: refused
       '          echo \\" " #" && pnpm install --frozen-lockfile', // 53: refused
+      // test-auditor's optional row on #106, added in BUG-68's second part:
+      // `$#` is a shell parameter (the number of arguments), so its `#`
+      // starts no comment and the install after it is a command. A `#` after
+      // it that starts a word is still a comment.
+      '      - run: |', // 54
+      '          echo $# && pnpm install --frozen-lockfile', // 55: refused
+      '          echo $# # && pnpm install', // 56: not a command, a comment after `$#`
       '',
     ].join('\n');
 
@@ -604,6 +634,7 @@ describe('BUG-68: every pnpm install in ci.yml runs with --ignore-scripts', () =
       'fixture.yml:51: pnpm install --frozen-lockfile',
       'fixture.yml:52: pnpm install --frozen-lockfile',
       'fixture.yml:53: pnpm install --frozen-lockfile',
+      'fixture.yml:55: pnpm install --frozen-lockfile',
     ]);
     expect(
       installs.filter((each) => each.ignoresScripts).map((each) => each.line),
@@ -613,12 +644,13 @@ describe('BUG-68: every pnpm install in ci.yml runs with --ignore-scripts', () =
     // pnpm install or pnpm i on one line, outside a comment. Not the shell
     // comment on line 7; not 12, 16 or 17, which name no install right after
     // pnpm; not 48 or 50 to 53, whose quoted `#` its cruder comment rule
-    // takes for one (the reading above finds each); not 49; and each one a
-    // line the decoded reading found.
+    // takes for one (the reading above finds each); not 49 or 56; but 55,
+    // whose `$#` it reads as text too; and each one a line the decoded
+    // reading found.
     const plain = plainInstallLines(fixture);
     expect(plain).toEqual([
       4, 8, 10, 13, 14, 15, 18, 22, 23, 25, 28, 30, 31, 32, 33, 35, 36, 37, 38, 39, 40, 41, 42, 43,
-      44, 45, 46,
+      44, 45, 46, 55,
     ]);
     expect(plain, 'the shell comment on line 7').not.toContain(7);
     expect(
@@ -708,6 +740,289 @@ describe('BUG-68: every pnpm install in ci.yml runs with --ignore-scripts', () =
     ).toEqual([
       'scalar.yml:2: pnpm/action-setup\'s run_install is "a `with:` that is not a mapping"',
     ]);
+  });
+});
+
+// --- Every workflow's installs ------------------------------------------------
+
+/**
+ * The workflows the every-workflow tests must find among the files they read
+ * (BUG-68's second part): ci.yml, and the two whose install runs just before
+ * a step that is given the Claude secrets, ai-review.yml's `review` job and
+ * daily-status.yml's `report` job. A reading without one is refused, so the
+ * tests cannot pass by reading the wrong folder, or one emptied or renamed.
+ */
+const NAMED_WORKFLOWS = ['ai-review.yml', 'ci.yml', 'daily-status.yml'];
+
+/**
+ * Every workflow file directly in a folder: each name ending in `.yml` or
+ * `.yaml`, in any case (whether GitHub runs a `.YML` file was not tried; it
+ * is read either way), sorted, with its text. A new workflow is read with no
+ * change here. A folder with none, or without each of `NAMED_WORKFLOWS`, is
+ * refused rather than read as clean, and a name that is not a file fails on
+ * its read.
+ */
+function workflowsIn(dir) {
+  const names = readdirSync(dir)
+    .filter((name) => /\.ya?ml$/i.test(name))
+    .toSorted();
+  if (names.length === 0) {
+    throw new Error(`BUG-68: no workflow was read in ${dir}, so none is called clean`);
+  }
+  const missing = NAMED_WORKFLOWS.filter((name) => !names.includes(name));
+  if (missing.length > 0) {
+    throw new Error(
+      `BUG-68: ${missing.join(', ')} not among the workflows read in ${dir} (${names.join(', ')}), so the reading is not called clean`,
+    );
+  }
+  return names.map((name) => ({ name, text: readFileSync(path.join(dir, name), 'utf8') }));
+}
+
+/**
+ * The lines of a workflow, outside a `(^|\s)#` comment, that name
+ * pnpm/action-setup@ in plain text, with no YAML parser: the plain check on
+ * `actionSetupSteps`, by the rule ci.yml's own test uses.
+ */
+const plainActionSetupLines = (text) =>
+  text
+    .split('\n')
+    .map((line, index) => ({ code: line.replace(/(^|\s)#.*$/, ''), number: index + 1 }))
+    .filter(({ code }) => /\bpnpm\/action-setup@/i.test(code))
+    .map(({ number }) => number);
+
+/**
+ * Every workflow in a folder (`workflowsIn`), each read both ways for its
+ * pnpm installs and its pnpm/action-setup steps: the files read, in order;
+ * every install and every step the decoded readings found; and, per file,
+ * where the plain reading disagrees with the decoded one, by count or by a
+ * line the decoded reading did not find.
+ */
+function everyWorkflow(dir) {
+  const readings = workflowsIn(dir).map(({ name, text }) => ({
+    name,
+    installs: installsIn(name, text),
+    plainInstalls: plainInstallLines(text),
+    steps: actionSetupSteps(name, text),
+    plainSteps: plainActionSetupLines(text),
+  }));
+  return {
+    read: readings.map(({ name }) => name),
+    installs: readings.flatMap(({ installs }) => installs),
+    steps: readings.flatMap(({ steps }) => steps),
+    installDisagreements: readings.flatMap(({ name, installs, plainInstalls }) => [
+      ...(plainInstalls.length === installs.length
+        ? []
+        : [
+            `${name}: pnpm installs, ${plainInstalls.length} by the plain reading and ${installs.length} by the decoded one`,
+          ]),
+      ...plainInstalls
+        .filter((number) => !installs.some((each) => each.line === number))
+        .map(
+          (number) =>
+            `${name}:${number}: the plain reading finds a pnpm install here, and the decoded one none`,
+        ),
+    ]),
+    stepDisagreements: readings.flatMap(({ name, steps, plainSteps }) => [
+      ...(plainSteps.length === steps.length
+        ? []
+        : [
+            `${name}: pnpm/action-setup steps, ${plainSteps.length} by the plain reading and ${steps.length} by the decoded one`,
+          ]),
+      ...plainSteps
+        .filter((number) => !steps.some((step) => step.where === `${name}:${number}`))
+        .map(
+          (number) =>
+            `${name}:${number}: the plain reading finds pnpm/action-setup here, and the decoded one no step that uses it`,
+        ),
+    ]),
+  };
+}
+
+/** Writes each `name: lines` of `files` into a fresh folder, as a workflow folder for the fixtures. */
+function workflowFolder(files) {
+  const dir = scratch();
+  for (const [name, lines] of Object.entries(files)) {
+    writeFileSync(path.join(dir, name), `${lines.join('\n')}\n`);
+  }
+  return dir;
+}
+
+describe('BUG-68: every pnpm install in every workflow runs with --ignore-scripts', () => {
+  test('BUG-68: every pnpm install in every workflow runs with --ignore-scripts, ai-review.yml’s and daily-status.yml’s before the Claude secrets among them, each file read two ways', () => {
+    const found = everyWorkflow(WORKFLOWS);
+    const read = found.read.join(', ');
+
+    expect(found.read, `the workflows read: ${read}`).toEqual(
+      expect.arrayContaining(NAMED_WORKFLOWS),
+    );
+    expect(
+      found.installs.length,
+      `pnpm installs the decoded reading finds in ${read}`,
+    ).toBeGreaterThan(0);
+    // Two readings, one count, in each file: every install in the workflows
+    // is written on one line, so the plain pass and the decoded one find as
+    // many in each, and each line the plain pass finds is one the decoded
+    // reading found.
+    expect(
+      found.installDisagreements,
+      `where the plain and the decoded readings of a workflow disagree on its pnpm installs, in ${read}`,
+    ).toEqual([]);
+    expect(
+      withScripts(found.installs),
+      `pnpm installs without --ignore-scripts in the workflows read (${read}): each runs every workspace package’s preinstall, install, postinstall and prepare, and the root’s, before the job’s later steps, which in ai-review.yml and daily-status.yml are given the Claude secrets (BUG-68)`,
+    ).toEqual([]);
+  });
+
+  test('BUG-68: no pnpm/action-setup step in any workflow runs an install of its own: its run_install is unset or false', () => {
+    const found = everyWorkflow(WORKFLOWS);
+    const read = found.read.join(', ');
+
+    expect(found.read, `the workflows read: ${read}`).toEqual(
+      expect.arrayContaining(NAMED_WORKFLOWS),
+    );
+    expect(
+      found.steps.length,
+      `pnpm/action-setup steps the decoded reading finds in ${read}`,
+    ).toBeGreaterThan(0);
+    expect(
+      found.stepDisagreements,
+      `where the plain and the decoded readings of a workflow disagree on its pnpm/action-setup steps, in ${read}`,
+    ).toEqual([]);
+    expect(
+      actionInstalls(found.steps),
+      `pnpm/action-setup steps whose run_install is not false, in the workflows read (${read}): the action runs pnpm install itself, with scripts on (BUG-68)`,
+    ).toEqual([]);
+  });
+
+  test('BUG-68: the every-workflow reading reads each .yml and .yaml file, one added later included, and reports each install, step and disagreement by file and line', () => {
+    const dir = workflowFolder({
+      'ci.yml': [
+        'jobs:', // 1
+        '  a:', // 2
+        '    steps:', // 3
+        '      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0', // 4: passes, no with
+        '      - run: pnpm install --frozen-lockfile --ignore-scripts', // 5: passes
+      ],
+      'ai-review.yml': [
+        'jobs:', // 1
+        '  review:', // 2
+        '    steps:', // 3
+        "      - if: steps.applies.outputs.run == 'true'", // 4
+        '        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0', // 5: passes, no with
+        "      - if: steps.applies.outputs.run == 'true'", // 6
+        '        run: pnpm install --frozen-lockfile', // 7: refused
+      ],
+      'daily-status.yml': [
+        'jobs:', // 1
+        '  report:', // 2
+        '    steps:', // 3
+        '      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413', // 4: refused
+        '        with: { run_install: true }', // 5
+        '      - run: pnpm install --frozen-lockfile --ignore-scripts', // 6: passes
+      ],
+      // A workflow added later, under the other extension: read with no change.
+      'new.yaml': [
+        'jobs:', // 1
+        '  b:', // 2
+        '    steps:', // 3
+        '      - run: |', // 4
+        '          echo $# && pnpm install --frozen-lockfile', // 5: refused, `$#` is no comment
+      ],
+      'Upper.YML': [
+        'jobs:', // 1
+        '  c:', // 2
+        '    steps:', // 3
+        '      - run: pnpm i', // 4: refused, the extension in another case
+      ],
+      // The plain pass takes the quoted `#` for a comment and drops the line,
+      // where the decoded reading finds the install: the counts disagree.
+      'quoted.yml': [
+        'jobs:', // 1
+        '  d:', // 2
+        '    steps:', // 3
+        '      - run: |', // 4
+        '          echo "build #1" && pnpm install --frozen-lockfile --ignore-scripts', // 5: passes
+      ],
+      // An install GitHub writes in from an expression, which the decoded
+      // reading takes as one word, and a step's name in a string that is no
+      // step: the plain pass finds each, and the decoded one neither.
+      'expression.yml': [
+        'jobs:', // 1
+        '  e:', // 2
+        '    steps:', // 3
+        "      - run: ${{ 'pnpm install' }}", // 4
+        '      - run: echo pnpm/action-setup@v6', // 5
+      ],
+      'notes.txt': ['pnpm install'], // not a workflow: not read
+    });
+    mkdirSync(path.join(dir, 'nested'));
+    writeFileSync(
+      path.join(dir, 'nested', 'deeper.yml'),
+      'jobs: { f: { steps: [{ run: pnpm i }] } }\n',
+    );
+
+    const found = everyWorkflow(dir);
+
+    expect(found.read, 'the files read, sorted, and only those directly in the folder').toEqual([
+      'Upper.YML',
+      'ai-review.yml',
+      'ci.yml',
+      'daily-status.yml',
+      'expression.yml',
+      'new.yaml',
+      'quoted.yml',
+    ]);
+    expect(withScripts(found.installs)).toEqual([
+      'Upper.YML:4: pnpm i',
+      'ai-review.yml:7: pnpm install --frozen-lockfile',
+      'new.yaml:5: pnpm install --frozen-lockfile',
+    ]);
+    expect(
+      found.installs.filter((each) => each.ignoresScripts).map((each) => each.where),
+      'the installs that pass',
+    ).toEqual(['ci.yml:5', 'daily-status.yml:6', 'quoted.yml:5']);
+    expect(found.steps.map((step) => step.where)).toEqual([
+      'ai-review.yml:5',
+      'ci.yml:4',
+      'daily-status.yml:4',
+    ]);
+    expect(actionInstalls(found.steps)).toEqual([
+      "daily-status.yml:4: pnpm/action-setup's run_install is true",
+    ]);
+    expect(found.installDisagreements).toEqual([
+      'expression.yml: pnpm installs, 1 by the plain reading and 0 by the decoded one',
+      'expression.yml:4: the plain reading finds a pnpm install here, and the decoded one none',
+      'quoted.yml: pnpm installs, 0 by the plain reading and 1 by the decoded one',
+    ]);
+    expect(found.stepDisagreements).toEqual([
+      'expression.yml: pnpm/action-setup steps, 1 by the plain reading and 0 by the decoded one',
+      'expression.yml:5: the plain reading finds pnpm/action-setup here, and the decoded one no step that uses it',
+    ]);
+  });
+
+  test('BUG-68: the every-workflow reading refuses a folder with no workflow, one without ci.yml, ai-review.yml or daily-status.yml, and a workflow that does not parse, rather than reading it as clean', () => {
+    const none = workflowFolder({ 'README.md': ['pnpm install'] });
+    expect(() => everyWorkflow(none)).toThrow(/no workflow was read/);
+
+    for (const gone of NAMED_WORKFLOWS) {
+      const without = workflowFolder(
+        Object.fromEntries(
+          [...NAMED_WORKFLOWS.filter((name) => name !== gone), 'other.yml'].map((name) => [
+            name,
+            ['on: push'],
+          ]),
+        ),
+      );
+      expect(() => everyWorkflow(without), `a folder without ${gone}`).toThrow(
+        `BUG-68: ${gone} not among the workflows read`,
+      );
+    }
+
+    const broken = workflowFolder({
+      ...Object.fromEntries(NAMED_WORKFLOWS.map((name) => [name, ['on: push']])),
+      'new.yml': ['jobs:', '  a: ['],
+    });
+    expect(() => everyWorkflow(broken)).toThrow(/new\.yml is not read as clean/);
   });
 });
 

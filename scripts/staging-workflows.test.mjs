@@ -1,8 +1,11 @@
 // INF-07, D-077: the two staging workflows, held to what makes them safe.
 //
-// Neither can run from a pull request — GitHub runs them only from main, and
-// only with the staging keys — so a mistake in them is found in production or
-// not at all. These tests are the review that runs before that.
+// Neither can run from a pull request: neither has a pull request trigger. A
+// manual run (workflow_dispatch) can target any branch that has the file, but
+// every job in both names the "staging" environment, which the owner limited
+// to main (A-21), so only main's code gets the staging keys. A mistake in them
+// is found in production or not at all. These tests are the review that runs
+// before that.
 import { spawnSync } from 'node:child_process';
 import { chmodSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';

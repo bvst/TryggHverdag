@@ -1555,6 +1555,24 @@ any other path is work, not a candidate for the same treatment.
   2026-09-23), so an owner question filed from a session is the owner's own
   issue, and GitHub does not notify people of their own actions. The daily
   report is therefore where those questions reach the owner.
+- **Record note, 2026-10-27 (added during BUG-68; nothing above it is changed;
+  the decision stands as accepted).** "What could not be verified before
+  merging" says GitHub runs scheduled **and manual** workflows only from the
+  default branch. The manual half is wrong. A scheduled run uses the default
+  branch's copy of `daily-status.yml`, but a `workflow_dispatch` run can target
+  any branch that has the file, and then runs that branch's code with the
+  Claude secrets (`privacy-security-reviewer`'s N3 on #106, `4830acc`; the
+  workflow's own header comment carried the same sentence). GitHub's events
+  reference, as `test-author` read it on 2026-10-27, agrees: a schedule or a
+  manual run starts only once the file is on the default branch, scheduled runs
+  use the default branch's latest commit, and a manual run can target any branch
+  and runs that branch's last commit. No record shows that a session started
+  such a run, so this rests on the reviewer's and the documentation's reading
+  and has not been tried. It changes nothing this decision decided: items 1 to
+  5 stand, and so does the point of that bullet for the scheduled half (the
+  first scheduled run comes after merge, and tests hold the rest). What it does
+  change is the risk of an install in that workflow, which BUG-68 closes with
+  `--ignore-scripts`; the header comment is corrected in the same change.
 
 ## D-077 — Staging v1: where it lives, who holds its key, and how it changes
 - **Date:** 2026-09-24 · **Status:** Accepted (items 1–4 by the owner; the rest delegated, D-031) · **Section:** 8
