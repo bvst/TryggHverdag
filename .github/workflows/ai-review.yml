@@ -177,11 +177,13 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with: { node-version-file: .nvmrc, cache: pnpm }
       - if: steps.applies.outputs.run == 'true'
-        run: pnpm install --frozen-lockfile
+        # --ignore-scripts, so no install-time script runs just before the next
+        # step, the one given the Claude secrets (BUG-68).
+        run: pnpm install --frozen-lockfile --ignore-scripts
 
       - if: steps.applies.outputs.run == 'true'
         id: review
-        uses: anthropics/claude-code-action@db77d4d3c98f3f6380e7cd45ffba2342a3dbde3c # v1.0.254
+        uses: anthropics/claude-code-action@925afb53776cf1a2b738c6bdbed37b4d4000ef13 # v1.0.262
         # Tells the project's stop gate and progress gate that this is a review
         # job, so they stand down (D-119): a review changes no code, and CI's
         # required checks run the same gates on this commit. On this step only —
