@@ -7428,3 +7428,13 @@ any other path is work, not a candidate for the same treatment.
       through CI, reproduced locally only;
     - any pnpm version but 10.33.0.
   - Extends D-139: more owner paths, the same mechanism. Supersedes nothing.
+- **Record note, 2026-10-27 (N1 on `1ec44d5`; added after the merge, and nothing
+  above it is changed; the decision stands as accepted).** The "Not re-reviewed"
+  bullet under B1 says that `a3170ff`, `586416f` and `014855b` "are not pushed
+  (`origin` reads `1f7e664`)" and that no reviewer had read them. That was true
+  when it was written, on 2026-10-26. They were pushed in `1ec44d5`, #105's head,
+  and all five reviewers passed them there: all five `ai-review` checks succeeded
+  on `1ec44d5` (GitHub's REST API, read 2026-10-27; I read the check runs, not the
+  reviewers' comments). #105 was squash-merged as `57e3a3e` on 2026-10-27 at about
+  05:59 UTC, after `urso-agent` approved `1ec44d5`, and `git diff 1ec44d5 57e3a3e`
+  is empty, so `main` has the reviewed tree and D-144's six lines.
