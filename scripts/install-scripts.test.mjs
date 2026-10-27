@@ -27,14 +27,22 @@
  *     `pnpm@<version>`, its `pnpm.cjs`, and behind `npx`, `corepack`,
  *     `pnpm dlx` or `node` (`PNPM_WORD`). ci.yml is read as GitHub decodes
  *     it, every string in it and not only `run:` (android-emulator-runner's
- *     `with: script:` is a shell command too), and each string as the shell
- *     splits it: lines joined at a trailing backslash, comments dropped,
- *     commands split at `;`, `&`, `|`, `&&`, `||`, parentheses and backticks,
- *     and a `${{ … }}` expression read as one word, which GitHub fills in
- *     before the shell runs. A plain reading of ci.yml's lines, with no YAML
- *     parser, must find as many lines that say `pnpm install` or `pnpm i`
- *     outside a comment as the decoded reading finds installs, each one of
- *     them, so a part of the file the decoded reading misses cannot hide one;
+ *     `with: script:` is a shell command too), and each string as a rough
+ *     shell reading splits it: a comment dropped from a `#` that starts a word
+ *     outside quotes, lines joined at a trailing backslash, commands split at
+ *     `;`, `&`, `|`, `&&`, `||`, parentheses, backticks, `<` and `>`, and a
+ *     `${{ … }}` expression read as one word, which GitHub fills in before the
+ *     shell runs. It is not a shell: what it does not split on, or a command
+ *     the shell assembles, it does not see (below);
+ *   - a second, plain reading of ci.yml's lines, with no YAML parser and its
+ *     own cruder comment rule, finds as many lines that say `pnpm install` or
+ *     `pnpm i` as the decoded reading finds installs, and each is a line the
+ *     decoded reading found. That catches a part of the file the YAML walk
+ *     misses, or a reading that finds nothing; the two share the separators,
+ *     so a form neither splits on is missed by both;
+ *   - no pnpm/action-setup step in ci.yml sets `run_install` to anything but
+ *     `false` (privacy-security-reviewer's N2 on #106): the action can run
+ *     `pnpm install` itself, with scripts on (`actionSetupSteps`);
  *   - no workspace package's package.json (each folder pnpm-workspace.yaml
  *     names; today apps/mobile, apps/server, packages/config,
  *     packages/contracts and packages/test-kit) holds a script named in
@@ -74,9 +82,13 @@
  *     on purpose), and installs by npm or yarn, corepack's included (corepack
  *     running pnpm is read, above);
  *   - an install the shell builds while it runs (`$PNPM install`,
- *     `$(command -v pnpm) install`, `eval`), pnpm under another file name, or
- *     an install a repository script or an action runs for the step: only the
- *     text of ci.yml is read;
+ *     `$(command -v pnpm) install`, `eval`), pnpm under another file name, a
+ *     here-document or a quoted string the rough reading splits wrongly, or
+ *     an install a repository script or an action other than
+ *     pnpm/action-setup runs for the step: only the text of ci.yml is read;
+ *   - pnpm/action-setup in another workflow, a composite action or a reusable
+ *     workflow that wraps it, and an `INPUT_RUN_INSTALL` environment variable
+ *     (whether the runner lets one override the input was not tried);
  *   - `npm_config_ignore_scripts` or an .npmrc `ignore-scripts` line: neither
  *     is read. pnpm gives the command-line option precedence: in the minimal
  *     workspace on 2026-10-27, with either set to `false`,
@@ -216,13 +228,11 @@ const yamlLibrary = (() => {
 // --- ci.yml's installs --------------------------------------------------------
 
 /**
- * Every string in a YAML document as a parser decodes it, key or value, at
- * every depth, each with the line its text starts on: the line after the
- * header for a block scalar (`|`, `>` and their kin), its own line otherwise.
- * A document that does not parse cleanly is refused, never read as clean.
+ * A YAML document, parsed, with a line counter for its nodes. A document that
+ * does not parse cleanly is refused, never read as clean.
  */
-function decodedStrings(file, text) {
-  const { LineCounter, parseDocument, visit } = yamlLibrary();
+function parsedYaml(file, text) {
+  const { LineCounter, parseDocument } = yamlLibrary();
   const lines = new LineCounter();
   const doc = parseDocument(text, { lineCounter: lines });
   const problems = [...doc.errors, ...doc.warnings];
@@ -231,6 +241,18 @@ function decodedStrings(file, text) {
       `${file} is not read as clean: ${problems.map((p) => p.message.split('\n')[0]).join('; ')}`,
     );
   }
+  return { doc, lines };
+}
+
+/**
+ * Every string in a YAML document as a parser decodes it, key or value, at
+ * every depth, each with the line its text starts on: the line after the
+ * header for a block scalar (`|`, `>` and their kin), its own line otherwise.
+ * A document that does not parse cleanly is refused, never read as clean.
+ */
+function decodedStrings(file, text) {
+  const { visit } = yamlLibrary();
+  const { doc, lines } = parsedYaml(file, text);
   const strings = [];
   visit(doc, {
     Scalar: (_, node) => {
@@ -247,20 +269,44 @@ function decodedStrings(file, text) {
 const unquoted = (word) => word.replace(/["']/g, '');
 
 /**
- * A string as the shell reads its commands: each `${{ … }}` one word, lines
- * joined at a trailing backslash, a comment dropped from a word that starts
- * with `#` on, and each line split into commands at `;`, `&`, `|`, `&&`,
- * `||`, parentheses and backticks, so `$(pnpm install)` is a command of its
- * own. Each command is its words and the index of the line it starts on.
+ * A line without its shell comment: from a `#` that starts a word, outside
+ * quotes, on. A `#` inside quotes (`echo "build #1"`) or inside a word (`$#`,
+ * `a#b`) is text, as it is to the shell (test-auditor on #106, round 2: the
+ * plain `(^|\s)#` dropped `echo "build #1" && pnpm install` whole).
+ */
+function withoutComment(line) {
+  let quote = null;
+  for (let at = 0; at < line.length; at += 1) {
+    const char = line[at];
+    if (quote !== null) {
+      if (char === quote) quote = null;
+      else if (char === '\\' && quote === '"') at += 1;
+    } else if (char === '\\') {
+      at += 1;
+    } else if (char === '"' || char === "'") {
+      quote = char;
+    } else if (char === '#' && (at === 0 || /[\s;&|()<>`]/.test(line[at - 1] ?? ''))) {
+      return line.slice(0, at);
+    }
+  }
+  return line;
+}
+
+/**
+ * A string as the shell reads its commands: each `${{ … }}` one word, each
+ * line's comment dropped (`withoutComment`), lines joined where what is left
+ * ends in a backslash, and each line split into commands at `;`, `&`, `|`,
+ * `&&`, `||`, parentheses, backticks and redirections (`<`, `>`), so
+ * `$(pnpm install)` and `pnpm install>log` are commands of their own. Each
+ * command is its words and the index of the line it starts on.
  */
 function shellCommands(text) {
   const commands = [];
   let carried = null;
   let startedAt = 0;
   const lines = text.replace(/\$\{\{[\s\S]*?\}\}/g, 'GITHUB_EXPRESSION').split('\n');
-  const take = (line, index) => {
-    const code = line.replace(/(^|\s)#.*$/, '');
-    for (const part of code.split(/&&|\|\||[;&|()`]/)) {
+  const take = (code, index) => {
+    for (const part of code.split(/&&|\|\||[;&|()`<>]/)) {
       const words = part
         .trim()
         .split(/\s+/)
@@ -271,13 +317,13 @@ function shellCommands(text) {
   };
   lines.forEach((raw, index) => {
     if (carried === null) startedAt = index;
-    const line = carried === null ? raw : `${carried} ${raw.trim()}`;
-    if (!/^\s*#/.test(line) && /\\\s*$/.test(line)) {
-      carried = line.replace(/\\\s*$/, '').trimEnd();
+    const code = withoutComment(carried === null ? raw : `${carried} ${raw.trim()}`);
+    if (/\\\s*$/.test(code)) {
+      carried = code.replace(/\\\s*$/, '').trimEnd();
       return;
     }
     carried = null;
-    take(line, startedAt);
+    take(code, startedAt);
   });
   if (carried !== null) take(carried, startedAt);
   return commands;
@@ -343,18 +389,84 @@ const withScripts = (installs) =>
 
 /**
  * The lines of a workflow, outside a comment, that say `pnpm install` or
- * `pnpm i` in plain text (pnpm with a version, or its script, too): read with
- * no YAML parser, as a check on the one above.
+ * `pnpm i` in plain text (pnpm with a version, or its script, too), between
+ * the same separators the shell reading splits at: read with no YAML parser
+ * and its own cruder comment rule, `(^|\s)#`, as a check on the reading
+ * above. It drops a line whose `#` is quoted before the install
+ * (`echo "build #1" && pnpm install`), where the reading above does not, so
+ * the two disagree there, and the count on ci.yml fails.
  */
 function plainInstallLines(text) {
   return text
     .split('\n')
     .map((line, index) => ({ code: line.replace(/(^|\s)#.*$/, ''), number: index + 1 }))
     .filter(({ code }) =>
-      /(?:^|[\s/"'(`])pnpm(?:@\S+|\.[cm]?js)?\s+(?:install|i)(?=\s|$|["')`])/.test(code),
+      /(?:^|[\s/"'(`;&|<>])pnpm(?:@\S+|\.[cm]?js)?\s+(?:install|i)(?=[\s"')`;&|<>]|$)/.test(code),
     )
     .map(({ number }) => number);
 }
+
+/**
+ * Every step of a workflow that uses pnpm/action-setup, with its
+ * `run_install` as decoded, or undefined when it sets none
+ * (privacy-security-reviewer's N2 on #106). The action can install by itself:
+ * the pinned v6.1.0 (`ea17c68`) parses `run_install` as YAML
+ * (`src/inputs/run-install.ts`, read 2026-10-27), where `null`, its default,
+ * and `false` install nothing, `true` runs `pnpm recursive install`, and an
+ * object or a list runs `pnpm install` with its `args`, scripts on unless they
+ * say otherwise. The action's owner and name are read without case, as GitHub
+ * reads them, and so is the input's name; a `with:` an alias names is
+ * followed, and one that is not a mapping is reported as such.
+ */
+function actionSetupSteps(file, text) {
+  const { isAlias, isMap, isScalar, visit } = yamlLibrary();
+  const { doc, lines } = parsedYaml(file, text);
+  const resolved = (node) => (isAlias(node) ? node.resolve(doc) : node);
+  const steps = [];
+  visit(doc, {
+    Map: (_, map) => {
+      const uses = resolved(map.get('uses', true));
+      if (!isScalar(uses) || !/^\s*pnpm\/action-setup@/i.test(String(uses.value))) return;
+      const where = `${file}:${lines.linePos(uses.range?.[0] ?? 0).line}`;
+      const inputs = resolved(map.get('with', true));
+      if (inputs === undefined || inputs === null) {
+        steps.push({ where, runInstall: undefined });
+        return;
+      }
+      if (!isMap(inputs)) {
+        steps.push({ where, runInstall: 'a `with:` that is not a mapping' });
+        return;
+      }
+      const setting = inputs.items.find((pair) => {
+        const key = resolved(pair.key);
+        return isScalar(key) && String(key.value).toLowerCase() === 'run_install';
+      });
+      const value = setting === undefined ? undefined : resolved(setting.value);
+      steps.push({
+        where,
+        runInstall: setting === undefined ? undefined : (value?.toJS?.(doc) ?? null),
+      });
+    },
+  });
+  return steps;
+}
+
+/**
+ * The pnpm/action-setup steps that set `run_install` to anything but `false`,
+ * as findings. Only `false` passes, written as a boolean or a string: GitHub
+ * hands the action the text either way. `null` installs nothing too, but one
+ * value is simpler to hold than the action's whole schema.
+ */
+const actionInstalls = (steps) =>
+  steps
+    .filter(
+      ({ runInstall }) =>
+        runInstall !== undefined && runInstall !== false && runInstall !== 'false',
+    )
+    .map(
+      ({ where, runInstall }) =>
+        `${where}: pnpm/action-setup's run_install is ${JSON.stringify(runInstall)}`,
+    );
 
 describe('BUG-68: every pnpm install in ci.yml runs with --ignore-scripts', () => {
   test('BUG-68: every pnpm install in ci.yml runs with --ignore-scripts, so no workspace package runs an install script before a job’s checks', () => {
@@ -428,6 +540,13 @@ describe('BUG-68: every pnpm install in ci.yml runs with --ignore-scripts', () =
       '      - run: /usr/local/bin/pnpm install', // 41: refused, a path to pnpm
       '      - run: node node_modules/pnpm/bin/pnpm.cjs install', // 42: refused, pnpm's script
       '      - run: pnpm install --frozen-lockfile \\', // 43: refused, a backslash ends the string
+      // test-auditor on #106, round 2: a redirection and a quoted `#`.
+      '      - run: pnpm install>log', // 44: refused
+      '      - run: pnpm install<in', // 45: refused
+      '      - run: pnpm install --ignore-scripts>log', // 46: passes
+      '      - run: |', // 47
+      '          echo "build #1" && pnpm install --frozen-lockfile', // 48: refused, the `#` is quoted
+      '          echo "#1" # && pnpm install', // 49: not a command, a comment after a quoted `#`
       '',
     ].join('\n');
 
@@ -454,24 +573,109 @@ describe('BUG-68: every pnpm install in ci.yml runs with --ignore-scripts', () =
       'fixture.yml:41: /usr/local/bin/pnpm install',
       'fixture.yml:42: node_modules/pnpm/bin/pnpm.cjs install',
       'fixture.yml:43: pnpm install --frozen-lockfile',
+      'fixture.yml:44: pnpm install',
+      'fixture.yml:45: pnpm install',
+      'fixture.yml:48: pnpm install --frozen-lockfile',
     ]);
     expect(
       installs.filter((each) => each.ignoresScripts).map((each) => each.line),
       'the installs that pass',
-    ).toEqual([4, 12, 16, 23, 25, 32, 37]);
+    ).toEqual([4, 12, 16, 23, 25, 32, 37, 46]);
     // The plain-text check (test-auditor on #106): exactly the lines that say
     // pnpm install or pnpm i on one line, outside a comment. Not the shell
     // comment on line 7; not 12, 16 or 17, which name no install right after
-    // pnpm; and each one a line the decoded reading found.
+    // pnpm; not 48, whose quoted `#` its cruder comment rule takes for one
+    // (the reading above finds it); not 49; and each one a line the decoded
+    // reading found.
     const plain = plainInstallLines(fixture);
     expect(plain).toEqual([
       4, 8, 10, 13, 14, 15, 18, 22, 23, 25, 28, 30, 31, 32, 33, 35, 36, 37, 38, 39, 40, 41, 42, 43,
+      44, 45, 46,
     ]);
     expect(plain, 'the shell comment on line 7').not.toContain(7);
     expect(plain.filter((number) => !installs.some((each) => each.line === number))).toEqual([]);
     expect(() => installsIn('broken.yml', 'jobs:\n  a: [\n')).toThrow(
       /broken\.yml is not read as clean/,
     );
+  });
+
+  test('BUG-68: no pnpm/action-setup step in ci.yml runs an install of its own: its run_install is unset or false', () => {
+    const text = readFileSync(path.join(WORKFLOWS, 'ci.yml'), 'utf8');
+    const steps = actionSetupSteps('ci.yml', text);
+    const plainly = text
+      .split('\n')
+      .filter((line) => /\bpnpm\/action-setup@/i.test(line.replace(/(^|\s)#.*$/, '')));
+
+    expect(steps.length, 'pnpm/action-setup steps the decoded reading finds in ci.yml').toBe(
+      plainly.length,
+    );
+    expect(steps.length).toBeGreaterThan(0);
+    expect(
+      actionInstalls(steps),
+      'pnpm/action-setup steps in ci.yml whose run_install is not false: the action runs pnpm install itself, with scripts on (BUG-68)',
+    ).toEqual([]);
+  });
+
+  test('BUG-68: the run_install check refuses every value but false, however the step writes it', () => {
+    const fixture = [
+      'jobs:', // 1
+      '  a:', // 2
+      '    steps:', // 3
+      '      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0', // 4: passes, no with
+      '      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413', // 5: passes
+      '        with: { run_install: false }', // 6
+      '      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413', // 7: passes
+      '        with:', // 8
+      "          run_install: 'false'", // 9
+      '      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413', // 10: refused
+      '        with:', // 11
+      '          version: 10.33.0', // 12
+      '          run_install: true', // 13
+      '      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413', // 14: refused, args or not
+      '        with:', // 15
+      '          run_install: |', // 16
+      '            - args: [--frozen-lockfile, --ignore-scripts]', // 17
+      '      - uses: PNPM/Action-Setup@ea17c68df8912ef543352723c149a84f56e3d413', // 18: refused, the name in another case
+      "        with: { run_install: 'true' }", // 19
+      '      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413', // 20: refused, the input in another case
+      '        with: { Run_Install: true }', // 21
+      '      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413', // 22: refused
+      '        with: &setup', // 23
+      '          run_install: null', // 24
+      '      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413', // 25: refused, the alias followed
+      '        with: *setup', // 26
+      '      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1', // 27: not pnpm/action-setup
+      '        with: { run_install: true }', // 28
+      '      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413', // 29: refused
+      '        with:', // 30
+      '          run_install: ${{ inputs.install }}', // 31
+      '',
+    ].join('\n');
+
+    const steps = actionSetupSteps('fixture.yml', fixture);
+
+    expect(steps.map((step) => step.where)).toEqual(
+      [4, 5, 7, 10, 14, 18, 20, 22, 25, 29].map((line) => `fixture.yml:${line}`),
+    );
+    expect(actionInstalls(steps)).toEqual([
+      "fixture.yml:10: pnpm/action-setup's run_install is true",
+      `fixture.yml:14: pnpm/action-setup's run_install is ${JSON.stringify('- args: [--frozen-lockfile, --ignore-scripts]\n')}`,
+      'fixture.yml:18: pnpm/action-setup\'s run_install is "true"',
+      "fixture.yml:20: pnpm/action-setup's run_install is true",
+      "fixture.yml:22: pnpm/action-setup's run_install is null",
+      "fixture.yml:25: pnpm/action-setup's run_install is null",
+      'fixture.yml:29: pnpm/action-setup\'s run_install is "${{ inputs.install }}"',
+    ]);
+    expect(
+      actionInstalls(
+        actionSetupSteps(
+          'scalar.yml',
+          'steps:\n  - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413\n    with: run_install\n',
+        ),
+      ),
+    ).toEqual([
+      'scalar.yml:2: pnpm/action-setup\'s run_install is "a `with:` that is not a mapping"',
+    ]);
   });
 });
 
