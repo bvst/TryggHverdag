@@ -123,6 +123,18 @@ export const OWNER_APPROVAL_PATHS = [
   '/.gitleaksignore',
   '/.gitleaks.toml',
   '/package.json',
+  // pnpm takes its settings and hooks from these, and every check runs through
+  // pnpm: one line can silence the security check's audit (BUG-65 to BUG-67) or
+  // make every `pnpm run` check pass having run nothing (BUG-69). The pnpmfile
+  // is owned before it exists, as /.gitleaks.toml is. The two workspace
+  // package.json files' install scripts run in CI before the audit (BUG-68).
+  // D-144.
+  '/pnpm-workspace.yaml',
+  '/pnpm-lock.yaml',
+  '/.npmrc',
+  '/.pnpmfile.cjs',
+  '/apps/server/package.json',
+  '/packages/contracts/package.json',
   // Their include and exclude lists decide which tests CI runs at all, the
   // gate drills among them (D-082).
   '/vitest.config.mjs',

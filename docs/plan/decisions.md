@@ -7023,3 +7023,408 @@ any other path is work, not a candidate for the same treatment.
     D-104 name. A session could not read the alerts setting (GitHub's API
     answered 403 on 2026-10-25), so whether they are on now is not verified.
   - Supersedes nothing.
+- **Corrected 2026-10-26, statements of fact** (the text above stays as
+  written; `test-auditor` and `privacy-security-reviewer` on #104):
+  - "green is `e47dee5`": on its own tree, `e47dee5` fails 2 of 29 tests in
+    `scripts/dependency-audit.test.mjs`, the two that need this entry ("BUG-11:
+    every advisory the audit ignores is accepted by a decision" and "BUG-15,
+    BUG-64: …exactly the three…"). The green is `e47dee5` and `3092a35`, which
+    adds this entry, together; #104 merged both as `35a3290`, and `main`'s
+    `security` job passed on it (`ci` run 40279208647). `8d437af`,
+    `e47dee5` and `3092a35` are #104's branch commits from before its squash:
+    they do not resolve on `main`, and #104's Commits tab keeps them; on
+    `main`, `35a3290` is the commit to check.
+  - "whether they are on now is not verified": verified off. GitHub's API
+    answers 403 "Dependabot alerts are disabled for this repository." (read
+    2026-10-25 and again 2026-10-26). So nothing automated would notice a
+    change to this advisory, such as a patched zod 3.x; turning the alerts on
+    is the owner's A-31.
+
+## D-144 — Six files that steer pnpm need the owner's approval (BUG-65 to BUG-69)
+- **Date:** 2026-10-26 · **Status:** Accepted (owner, 2026-10-26: four answers
+  in session, quoted below; each came with Claude's recommendation, and the
+  recommended option was chosen each time) · **Section:** 8 (CI-01, SEC-06;
+  extends D-139; D-042, D-071, D-143). D-143 is the last number taken on
+  `main`, and the only open pull requests besides #105, which carries this, are
+  Dependabot's (#102, #103; GitHub's REST API, 2026-10-26), so none can have
+  taken D-144.
+- **Context:**
+  - **What pnpm reads.** pnpm takes its settings, and its hooks, from files in
+    the repository, and every CI check runs through `pnpm run` or another pnpm
+    command. Six paths that decide what pnpm does had no code owner at
+    `ec81f65`, the head of #105: `.github/CODEOWNERS` has no line for any of
+    them, and `OWNER_APPROVAL_PATHS` in `scripts/lib/merge-rules.mjs` names
+    none (read 2026-10-26). `/package.json`, `/apps/mobile/package.json`,
+    `/packages/config/` and `/packages/test-kit/` have lines.
+  - **What #105 found, each a change to one of those files** (by
+    `privacy-security-reviewer`, except BUG-66, which the coordinating session
+    found while verifying BUG-65, and BUG-67, found with `test-auditor`):
+    - **BUG-65, BUG-66, BUG-67:** a setting in `pnpm-workspace.yaml` or
+      `.npmrc` can silence or redirect the audit that the required `security`
+      check runs: `auditConfig` and `ignoreGhsas` written with escapes
+      (BUG-65), a `registry=` line (BUG-66), a `registries:` key hidden behind
+      a lone carriage return (BUG-67). Each was shown with pnpm 10.33.0 to make
+      `pnpm audit --audit-level high` exit 0 where its control exits 1
+      (`progress/m3.md`, 2026-10-26). Each is refused on #105's branch by a test
+      in `scripts/dependency-audit.test.mjs`, when that test runs, and by no
+      owner.
+    - **BUG-68:** an install script in a workspace package's `package.json`
+      runs in CI's `security` job, in `pnpm install --frozen-lockfile`, before
+      the audit.
+    - **BUG-69, the BLOCK,** next.
+  - **The BLOCK on #105 (BUG-69).** `privacy-security-reviewer` returned BLOCK
+    at head `ec81f65`. It cites `357cd4f`, GitHub's test-merge of `ec81f65`
+    into `main`; the coordinating session checked that commit's parents.
+    - **The finding.** pnpm 10.33.0 reads `scriptShell` from
+      `pnpm-workspace.yaml` and `script-shell` from `.npmrc`. Every CI check
+      runs through `pnpm run`, among them `pnpm run test:unit`, which runs the
+      guard test on those same two files. One line makes `pnpm run` hand every
+      script to a shell the pull request chooses, so every check goes green
+      having run nothing, the guard test included. Run directly, the test
+      refuses both lines; the route stops it from being run.
+    - **Reproduced by the coordinating session** with pnpm 10.33.0, in a
+      minimal project with a script that echoes and exits 1:
+      - control: exit 1, and the script ran;
+      - `scriptShell: /bin/true` in `pnpm-workspace.yaml`: exit 0, and the
+        script did not run;
+      - `script-shell=/bin/true` in `.npmrc`: exit 0, not run;
+      - a root `.pnpmfile.cjs` with an `updateConfig` hook returning
+        `{ ...config, scriptShell: '/bin/true' }`: exit 0, not run. The
+        coordinating session found this one beyond the reviewer's report.
+        10.33.0's default pnpmfile name is only `.pnpmfile.cjs` (checked in its
+        bundle);
+      - a package's own `.npmrc` with `script-shell` hijacked a run only from
+        inside that package's folder. From the root (`--filter`, `-r`) the
+        script ran and failed. No package has one today (`git ls-files`,
+        2026-10-26: the only tracked `.npmrc` is the root's). *Later the same
+        day: turbo runs each package's script from that package's folder, so
+        such a file does reach the typecheck ("Verified 2026-10-26", under
+        Consequences).*
+    - **The reviewer's own runs,** reported and not repeated by us: in a
+      `git archive` copy of `357cd4f` with `scriptShell: /bin/true`,
+      `pnpm run test:unit` and `pnpm run licenses:check` exited 0 having run
+      nothing, while running the test file directly with vitest failed as it
+      should.
+    - **Why it blocks now.** The route is open on `main` already. The owner had
+      put D-144 after #105 (answer 1, below), on the understanding that #105's
+      test closed these routes in the meantime. In CI it does not: the test is
+      run by the pnpm that the route disables.
+  - **The owner's answers,** all in session, on 2026-10-26, in time order. The
+    English after each quotation is Claude's gloss, not the owner's words.
+    1. **On `/pnpm-workspace.yaml` and `/pnpm-lock.yaml`,** the earlier answer,
+       already recorded in `progress.md` and `progress/m3.md`. The question as
+       recorded there (in English; the Norwegian text is not in the record),
+       asked on #104 and in session on 2026-10-25: "should
+       `/pnpm-workspace.yaml` and `/pnpm-lock.yaml` have a code owner?" Claude
+       recommended both, in a separate small pull request like #98 and #100
+       (CODEOWNERS plus `OWNER_APPROVAL_PATHS`). **Answer:** "Ja, begge filene
+       (Recommended)" (yes, both files). It was recorded as D-144's own pull
+       request, after #105.
+    2. **The BLOCK.** The question: "privacy-security-reviewer har blokkert
+       #105, og jeg har bekreftet funnet med pnpm 10.33.0: én linje
+       (`scriptShell: /bin/true` i pnpm-workspace.yaml, eller
+       `script-shell=/bin/true` i .npmrc) får `pnpm run` til å avslutte med 0
+       uten å kjøre noe. Alle CI-sjekkene kjører gjennom `pnpm run`, også testen
+       som skal fange nettopp dette. En PR som bare endrer én av disse filene
+       kan dermed slå av audit-sjekken og få alt grønt, uten at du må godkjenne.
+       Hvordan vil du løse det?" (The reviewer has blocked #105 and the one line
+       makes `pnpm run` exit 0 and run nothing; every CI check goes through
+       `pnpm run`, the test that should catch this included; a pull request
+       that changes only one of the files can switch the audit off and get
+       everything green without the owner's approval; how to solve it?) The
+       three options, as the coordinating session gave them:
+       - "D-144 inn i #105, + .npmrc (Recommended)": code-own
+         `/pnpm-workspace.yaml`, `/pnpm-lock.yaml` and `/.npmrc` now, in #105,
+         with a CI check before pnpm as its own bug afterwards;
+       - "D-144 inn i #105, bare to filer" (D-144 into #105, two files only);
+       - "Behold D-144 separat" (keep D-144 separate): a Node check before the
+         first pnpm command in each CI job instead.
+
+       **Answer:** "D-144 inn i #105, + .npmrc (Recommended)". The first
+       answer planned a separate pull request; the BLOCK moved D-144 into #105
+       by the owner's choice.
+    3. **The two manifests.** The question: "Skal apps/server/package.json og
+       packages/contracts/package.json også få deg som kodeeier? (Et
+       installasjonsskript i dem kjører i CI før audit-sjekken, BUG-68.
+       apps/mobile/package.json og rot-package.json har deg allerede.)" (Should
+       the two manifests get the owner as code owner too? An install script in
+       them runs in CI before the audit, BUG-68; the mobile app's and the
+       root's already have the owner.) Options: "Ja, begge (Recommended)",
+       "Nei". **Answer:** "Ja, begge (Recommended)" (yes, both).
+    4. **`/.pnpmfile.cjs`.** The question: "En sjette fil av samme slag: pnpm
+       10.33.0 laster `/.pnpmfile.cjs` fra roten automatisk, og jeg har
+       bekreftet at en `updateConfig`-hook i den kan sette `scriptShell` og få
+       `pnpm run` til å avslutte med 0 uten å kjøre noe. Filen finnes ikke i
+       dag, og ingen linje i CODEOWNERS dekker den, så en PR som legger den til
+       trenger ikke din godkjenning. Skal `/.pnpmfile.cjs` også få deg som
+       kodeeier i D-144?" (A sixth file of the same kind: pnpm loads it from
+       the root by itself, a hook in it can set `scriptShell`, it does not
+       exist today, and no CODEOWNERS line covers it, so a pull request that
+       adds it needs no approval; should it get the owner too?) Options: "Ja,
+       ta den med (Recommended)", "Nei". **Answer:** "Ja, ta den med
+       (Recommended)" (yes, include it).
+- **Decision:**
+  - **These six paths need the owner's approval:**
+    1. `/pnpm-workspace.yaml`: the workspace's pnpm settings and the catalog of
+       shared versions. A top-level key here can silence or redirect the audit
+       (`auditConfig`, BUG-65; `registries`, BUG-67), change `overrides`
+       (BUG-25), or set `scriptShell` (BUG-69).
+    2. `/pnpm-lock.yaml`: what is installed, and what the audit reads. A
+       `resolution.tarball` with a false version label can change what the
+       audit sees (`privacy-security-reviewer`'s note on `a0c11ed`: reported,
+       not reproduced).
+    3. `/.npmrc`: pnpm's own settings file. A `registry=` line redirects the
+       audit (BUG-66) and `script-shell=` stops every `pnpm run` check from
+       running (BUG-69). The guard test pins it to exactly `engine-strict=true`
+       and a newline.
+    4. `/.pnpmfile.cjs`: pnpm 10.33.0 loads it from the root by itself, and an
+       `updateConfig` hook in it can set any setting, `scriptShell` included
+       (BUG-69). **It does not exist;** it is owned so that adding one needs
+       the owner. BUG-11's test in `scripts/dependency-audit.test.mjs` already
+       refuses any root file with `pnpmfile` in its name (read 2026-10-26), but
+       it runs through the pnpm that such a hook can stop, so the owner's
+       review is the other line.
+    5. `/apps/server/package.json`: a workspace package's install script
+       (`preinstall`, `install`, `postinstall`, `prepare`) runs in CI's
+       `security` job before the audit (BUG-68). The file also holds the
+       server's dependencies.
+    6. `/packages/contracts/package.json`: the same.
+
+    With these two, the manifests of the five packages that existed each have
+    an owner: `/apps/mobile/package.json`, `/packages/config/` and
+    `/packages/test-kit/` had one already, and so has the root
+    `/package.json` (CODEOWNERS, read 2026-10-26). **Corrected 2026-10-26
+    (B1, below):** this paragraph first said "every workspace package's
+    manifest has an owner", which held only for the packages that existed. The
+    workspace took in `apps/*` and `packages/*`, so a new
+    `apps/<new>/package.json`, which no CODEOWNERS line matches, joined it and
+    ran its install scripts in CI. The workspace now names its five packages
+    (Consequences), and the sentence holds from #105's merge.
+  - **They go in both lists that must agree:** `.github/CODEOWNERS`, and
+    `OWNER_APPROVAL_PATHS` in `scripts/lib/merge-rules.mjs`, which
+    `gate:integrity` (CI-01) checks against CODEOWNERS. Each is owned by
+    `@bvst @urso-agent` like every other owner path (D-071), written from the
+    repository root, with its reason beside it as a comment (D-139's form).
+  - **Who decided:** the owner decided the scope, six paths (answers 1 to 4).
+    Claude chose the wording of each reason, the order, and the points under
+    Consequences (D-031), among them, after B1, that the workspace names its
+    packages by folder. That adds no path to the six and asks the owner for
+    nothing new; the owner's answer 3 was given when the records said owning
+    the two manifests covered BUG-68's route, which held for the two packages
+    that existed and not for a new one.
+  - **Not in this decision:**
+    - `/.nvmrc`, `/.node-version` and `/turbo.json`, which have no code owner
+      either (tracked, and in neither CODEOWNERS nor `OWNER_APPROVAL_PATHS`,
+      read 2026-10-26): `/.nvmrc` is queued, not asked (`progress.md`,
+      follow-up 18); the other two are `privacy-security-reviewer`'s note N4 on
+      `7dda5b8`, noted and not decided;
+    - a package's own `.npmrc`, `pnpm-workspace.yaml` or `.pnpmfile.cjs` (none
+      exists today). They get no CODEOWNERS line here; a test refuses them
+      instead (`94cdebc`, "Verified 2026-10-26" below). The same goes for the
+      two files under `spikes/background-safety/app/` (its own
+      `pnpm-workspace.yaml` and `pnpm-lock.yaml`, outside the workspace; D-093
+      and D-143 say CI's audit does not read that lockfile). A leading `/`
+      anchors a CODEOWNERS pattern at the root, so these six lines match none
+      of them;
+    - BUG-25's remaining route, `link:` and `file:` resolutions in the
+      lockfile, which the owner's review of `/pnpm-lock.yaml` now covers but
+      no test pins;
+    - BUG-68's fix, its own pull request, and wider than first planned
+      (`privacy-security-reviewer`'s S1 on `1f7e664`): `--ignore-scripts` on
+      every `pnpm install` that runs before a required check, not on the
+      `security` job's alone. `ci.yml` has ten installs (lines 57, 100, 138,
+      192, 237, 275, 306, 414, 581 and 786), and `ai-review.yml:180` installs
+      in a job with `id-token: write` and `pull-requests: write`, before the
+      step that is given the Claude secrets (read 2026-10-26). Editing
+      `ai-review.yml` is a hand merge (D-075). The planned test that refuses
+      install scripts in workspace `package.json` files runs after the
+      install, so it is a second line only. `daily-status.yml:81` also
+      installs; I did not look at it.
+- **Consequences:**
+  - **Where it lands.** In #105, by the owner's answer 2. `test-author`'s tests
+    came first (RG-02): two tests in `scripts/gate.test.mjs`, named "BUG-69: …",
+    red in `2a0f6c2`; `dad32ba` adds the eleventh exception below. **When
+    this entry was written, neither list had any of the six** (read on the
+    branch at `dad32ba`, which has the red tests). `implementer` then added
+    them in `e61b03e`: six lines in `scripts/lib/merge-rules.mjs` and six in
+    `.github/CODEOWNERS`, one each, naming `@bvst @urso-agent`, under a
+    comment citing D-144; `ai-review.yml` is unchanged. The tests that were
+    red pass with them (the `gate`, `merge-rules` and `dependency-audit` tests,
+    352 of 352, 2026-10-26). **They are on #105's branch only: `main` has
+    none of the six lines until #105 merges,** so the owner reviews these
+    files from then on, not before. #105 changes owner paths (`scripts/`,
+    `.github/`, this file), so it needs a code owner's approval like any other
+    pull request (D-042, D-071).
+  - **The owner reviews every change to these files,** Dependabot's lockfile
+    bumps included. The cost, stated plainly: a change to a dependency now
+    waits for the owner, because the lockfile changes with it (CI installs
+    with `--frozen-lockfile`), and so does a change to the server's or the
+    contracts' own manifest, scripts and all.
+  - **The test-side checks stay as a second line.** The allowlists in
+    `scripts/dependency-audit.test.mjs` (BUG-65, BUG-66, BUG-67) are not
+    removed or loosened by this decision. Whether to trim the decoded-key
+    checks that the allowlists may make redundant (`progress.md`, follow-up 15)
+    is a separate question, not agreed, and would need `test-author`'s written
+    reason (RG-03).
+  - **The check before pnpm (BUG-69) is still to come,** its own bug and pull
+    request after #105. Claude's plan: a Node script with no dependencies, so
+    it can run before `pnpm install`, which checks the `.npmrc` byte pin, the
+    workspace file's line grammar, that no root `.pnpmfile.cjs` exists, and
+    that none of the three settings files exists in a package folder (the test
+    of `94cdebc` refuses them only in a run that reaches it), and which runs
+    before the first pnpm command in every job that gates a merge.
+    A skipped required check counts as passed, so each such job must run it
+    unconditionally. Until then the owner's review of these files is what
+    stands between a pull request and the route; it is not a check that runs.
+  - **The reviewer's note on `a0c11ed` is covered:** a `resolution.tarball`
+    with a false version label in `pnpm-lock.yaml` now needs the owner's
+    approval, which is its code owner's role (item 2).
+  - **The ai-review `safety` filter is not changed,** Claude's choice (D-031),
+    as D-102 and D-139 did: changing it would make #105 edit `ai-review.yml`,
+    which CI's reviewers cannot review (D-075). A workspace manifest holds
+    dependencies and scripts, not safety logic, and `privacy-security-reviewer`,
+    which runs on every pull request, has dependencies in its brief (read
+    2026-10-26; install scripts are not named there). The gate test "The safety
+    filter in ai-review.yml matches the paths the owner must approve"
+    (`scripts/gate.test.mjs`) requires every `/apps/` owner path to be in the
+    filter, except ten named and pinned exactly (D-102, D-139; read
+    2026-10-26). `/apps/server/package.json` is the one `/apps/` path among
+    these six, so the pin becomes eleven: `test-author` made that change in
+    `dad32ba`, with the reason beside it (RG-03), narrowing the test by that
+    one path and no other. `/packages/contracts/package.json` is under
+    `packages/contracts/**`, which the filter lists (read 2026-10-26), so it
+    summons `safety-reviewer` by path already, and the other four are not
+    under `/apps/`. `427641c` then made the eleven one list,
+    `SAFETY_FILTER_EXCEPTIONS`, read by the filter test and by the four D-141
+    guards (CALL-01-AC9 and CALL-02-AC10 to AC12), which had kept a copy of
+    ten (`test-auditor` on `7dda5b8`; `test-author` planted an exception under
+    `/apps/mobile/e2e/` in a scratch copy, and the four passed at `7dda5b8`;
+    CALL-02-AC11 now fails on it). The comment on the eleventh now says what
+    is true: the reviewer's brief names dependencies, not install scripts
+    (`.claude/agents/privacy-security-reviewer.md`, lines 3, 24 and 25), and
+    BUG-68's fix in CI is what closes that.
+  - **Verified 2026-10-26, after the reviews of `7dda5b8`** (this entry's
+    "Not verified" list, as first written, had turbo's folder open):
+    - **CI and reviews on `7dda5b8`** (GitHub's REST API and #105's comments,
+      read 2026-10-26): all 17 checks succeeded and `mutation-group` was
+      skipped; all five reviewers passed. `privacy-security-reviewer` cleared
+      the BLOCK that the six lines answer. Its note N1: a last-match check of
+      CODEOWNERS over 808 paths found exactly six files gaining
+      `@bvst @urso-agent` and none losing an owner, and GitHub's
+      `codeowners/errors` returned none.
+    - **Turbo runs each package's script from that package's folder.**
+      `privacy-security-reviewer` found it first (S1): with a deliberate type
+      error in `apps/server/src` and `apps/server/.npmrc` holding
+      `script-shell=/bin/true`, `pnpm run typecheck` exited 0, "5 successful,
+      5 total", and the error got through; without the line it failed with
+      TS2322. A package-level `scriptShell` in `pnpm-workspace.yaml` did the
+      same, and a package-level `.pnpmfile.cjs` alone did not (the reviewer's
+      runs). **The coordinating session reproduced it on this repository**
+      with pnpm 10.33.0: with a temporary type error in `apps/server/src`,
+      `pnpm exec turbo run typecheck --filter=@trygghverdag/server --force`
+      exits 2 (TS2322); with `apps/server/.npmrc` holding
+      `script-shell=/bin/true` added, it exits 0, "4 successful", with no
+      TS2322. Both probe files were removed. So a package's own settings file
+      can make that package's typecheck, a step of `gate:static` (`ci.yml`,
+      `pnpm run gate:static`), pass having run nothing. **It was open on
+      `main` too.** `turbo.json` defines one task, `typecheck`, and the root
+      script of that name is `turbo run typecheck` (read 2026-10-26).
+    - **Not affected** (the reviewer's list): commands started from the root
+      with `--filter … run`, such as the mobile jest suite in `test:unit`; the
+      audit; the licence check; and the unit, system and integration tests.
+    - **How #105 answers it, and not by code owner.** `94cdebc` (`test-author`)
+      adds a test, run by the root Vitest run, whose configuration is
+      code-owned, that refuses any `.npmrc`, `pnpm-workspace.yaml` or
+      `.pnpmfile.cjs` in the repository except the root's two and
+      `spikes/background-safety/app/pnpm-workspace.yaml`, which is outside the
+      root workspace. It walks the tree with no git subprocess and skips
+      `node_modules` and `.git`; the test's own comment says the files it
+      refuses cannot switch it off, because the root run starts from the root.
+      The coordinating session probed it: with `apps/server/.npmrc` added it
+      fails (1 failed, 52 passed), and the file was removed afterwards. The
+      same commit adds named fixtures: `scriptShell: /bin/true` is refused by
+      the line grammar and `WORKSPACE_SETTINGS`, and `script-shell=/bin/true`
+      by `RC_SETTINGS`. The gate, merge-rules, gate-integrity,
+      dependency-audit and decision tests pass 404 of 404 (the coordinating
+      session's run, and mine), and `tests:changes` reports none weakened.
+      BUG-69's check before pnpm in CI stays queued, and refuses such files
+      too.
+  - **The second BLOCK, B1, on `1f7e664` (2026-10-26).**
+    `privacy-security-reviewer` returned BLOCK (merge commit `a34530a`;
+    comment 6422534100). Claude's account of it, from the comment and the
+    coordinating session:
+    - **The route.** `pnpm-workspace.yaml` and the root `package.json`'s
+      `workspaces` took in `apps/*` and `packages/*`. A pull request that added
+      only `apps/<new>/package.json`, which no CODEOWNERS line matches (last
+      match wins), created a workspace package. Its `preinstall` or
+      `postinstall` runs during `pnpm install --frozen-lockfile` in every
+      required job, and in `ai-review.yml:180`'s install. It can write
+      `script-shell=/bin/true` to the root `.npmrc`, so every later `pnpm run`
+      passes having run nothing: BUG-69's route, by a path D-144 did not cover.
+    - **The lockfile does not stop it.** With the repository's real files and
+      an added `apps/evil/package.json` with no dependencies, the reviewer got
+      "Lockfile is up to date" (its probe on the real repository stopped
+      offline while fetching packages, after printing that line).
+      `pnpm-lock.yaml`, which this decision gives an owner, need not change.
+    - **Reproduced by the coordinating session** in a minimal pnpm 10.33.0
+      workspace: with `apps/*`, a package added after the lockfile, whose
+      `preinstall` appends `script-shell=/bin/true` to the root `.npmrc`:
+      `CI=1 pnpm install --frozen-lockfile` exits 0 and runs it, and the next
+      `pnpm run` of a failing script exits 0 without running it. With the
+      packages named, the same install leaves `.npmrc` alone ("Scope: all 2
+      workspace projects") and the failing script exits 1.
+    - **Neither planned follow-up closed it.** BUG-68's plan was
+      `--ignore-scripts` in `security` only, and BUG-69's check before pnpm
+      runs before the install, so before the script writes `.npmrc`.
+    - **This was not #105's doing:** the route is open on `main`. It was wrong
+      of the records to say it was covered: this decision's "every workspace
+      package's manifest has an owner" (corrected above) and the BUG-68 row's
+      "D-144 gives both an owner".
+    - **The fix, the reviewer's preferred one, chosen by Claude (D-031) and
+      using only owned files:** `a3170ff` (`test-author`, red) adds three
+      tests to `scripts/dependency-audit.test.mjs`: both lists must name
+      exactly `apps/mobile`, `apps/server`, `packages/config`,
+      `packages/contracts` and `packages/test-kit`, with no glob; each named
+      folder's `package.json` must be an owner path; every folder under
+      `apps/` and `packages/` with a `package.json` must be named.
+      `586416f` (`implementer`) makes `pnpm-workspace.yaml`'s `packages:` and
+      `package.json`'s `workspaces` name the five, with a comment saying why.
+      A new package now needs a change to two owned files, so "every
+      workspace package's manifest has an owner" holds from #105's merge.
+      `pnpm-lock.yaml` is unchanged (`git diff 1f7e664 HEAD`, 2026-10-26). The
+      implementer reports `CI=1 pnpm install --frozen-lockfile --offline`:
+      "Scope: all 6 workspace projects", "Lockfile is up to date". I ran
+      `imports:check` (passes) and the gate, merge-rules, gate-integrity,
+      dependency-audit, affected, decision, gate-decisions and drills tests:
+      687 of 687.
+    - **`014855b` (`test-author`, on `test-auditor`'s PASS on `1f7e664`):** its
+      S1 says pnpm 11 looks for `.pnpmfile.mjs` first (its reading of pnpm
+      11.25.0's bundle, not run), and nothing pinned pnpm's major, so a move
+      to pnpm 11 would leave a root `.pnpmfile.mjs` with no owner. A test pins
+      `package.json`'s `packageManager` to pnpm 10.x; its message says a move
+      to another major must first give each default pnpmfile name an owner,
+      `/.pnpmfile.mjs` for pnpm 11. `/package.json` is owned, so the move
+      itself needs the owner. The settings-file walk skips `.stryker-tmp`
+      (its N3), and `scripts/drills.test.mjs` reads a plain workspace folder
+      as well as `folder/*`. The check before pnpm should also refuse any
+      root file matching `/pnpmfile/i` (its suggestion).
+    - **Not re-reviewed:** `a3170ff`, `586416f` and `014855b` are not pushed
+      (`origin` reads `1f7e664`), and no reviewer has read them.
+    - **`privacy-security-reviewer`'s notes on `1f7e664`.** N3: package-level
+      settings files are guarded by a test, not an owner (this decision's
+      choice); their reach is turbo's `typecheck`, the only turbo task, and an
+      unowned `apps/server/tsconfig.json` can already make typecheck pass over
+      an error (the reviewer's statement; not reproduced by us), so they add
+      no new reach. An install script could write those files after the walk
+      test's checkout; with the named list, only an owned package's script
+      could. N1: the reviewer's token read `bypass_actors` as null, so who can
+      bypass the rules is unverified there; `gate:integrity`'s 5 of 5
+      remains the check. `code-reviewer` passed `1f7e664` with no should-fix,
+      and `test-auditor` passed it.
+  - **Not verified here:**
+    - the reviewer's full combined attack (a shell the pull request chooses,
+      through every required check, to a merge): each half was shown, but the
+      whole was never run in CI. The reviewer says the same of the route
+      through CI, reproduced locally only;
+    - any pnpm version but 10.33.0.
+  - Extends D-139: more owner paths, the same mechanism. Supersedes nothing.

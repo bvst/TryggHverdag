@@ -71,6 +71,82 @@
  *     testcontainers declares `^8.9.0` (12.1.0, the locked one) and `^8.11.2`
  *     (12.2.1, its newest), so 8.12.2 is in range. Fixed, a row in `PATCHED`.
  *
+ * BUG-65 is a hole in this file's own check, found by #105's
+ * privacy-security-reviewer. BUG-11's check matched the text of
+ * pnpm-workspace.yaml and the root .npmrc against the words that set audit
+ * settings, but pnpm reads neither as text. It reads the workspace file as
+ * YAML, which decodes the escapes in a double-quoted key, and the .npmrc with
+ * `ini`, which JSON-decodes a quoted name. Then it fills in `${NAME}`, or
+ * `${NAME-fallback}` when NAME is unset, from the environment in each
+ * top-level key of the one and each name of the other. So a key spelled
+ * `audit` + an escaped `C` + `onfig` is auditConfig to pnpm and nothing to the
+ * check. With the root package.json's auditConfig removed, in a scratch copy
+ * of #105's head on 2026-10-26, `pnpm audit --audit-level high` exited 0,
+ * "2 high (2 ignored)", on each of: pnpm-workspace.yaml with auditConfig and
+ * ignoreGhsas behind `\u` escapes; pnpm-workspace.yaml with the key
+ * `pnpm${TRYGG_UNSET-f}ile` naming a hook file whose updateConfig set
+ * auditConfig; and the .npmrc naming that hook behind a JSON-quoted escape or
+ * the same fallback. It exited 1 with none of them. Neither file had a code
+ * owner (D-144 gives each one in #105), so a pull request touching only one
+ * could silence the required `security` check. Now each is also read as pnpm
+ * reads it, with the text check kept as a belt. A workflow, which GitHub reads
+ * as YAML, is read decoded as well, for the same words and for the audit
+ * command. Every route this file refuses is refused only when it runs, and in
+ * CI a pnpm setting can stop it running (BUG-69, under "Not pinned").
+ *
+ * BUG-66 is a setting none of those words names: `registry`. pnpm sends the
+ * audit to the registry the root .npmrc names, and CI's `security` job
+ * installs and audits with it. On 2026-10-26, in a scratch copy of #105's
+ * head, a local server that answered every request with no advisories, and
+ * `registry=http://127.0.0.1:48731/` added to the .npmrc, made
+ * `pnpm audit --audit-level high` exit 0, "No known vulnerabilities found";
+ * the unchanged file exits 1. A registry that serves the real packages and
+ * reports no advisories would pass the install as well. So the root .npmrc
+ * may hold only the settings in `RC_SETTINGS`, today `engine-strict`, and
+ * any other name fails, read as pnpm's `ini` reads it. A proxy, `strict-ssl`
+ * or a certificate setting was not tried, and is refused by the list either
+ * way.
+ *
+ * BUG-67 is the same in pnpm-workspace.yaml, found by #105's
+ * privacy-security-reviewer. pnpm copies the file's top-level keys into its
+ * settings, and the audit asks `registries.default`. A `registry` key there
+ * had no effect, but with `registries:` and `default:` pointing at the same
+ * server, `pnpm audit --audit-level high` exited 0, "No known
+ * vulnerabilities found" (2026-10-26); the unchanged file exits 1. The
+ * reviewer also reported a `lockfileDir` pointing at an empty lockfile making
+ * the audit pass; it was not shown to get through
+ * `pnpm install --frozen-lockfile`. So the file's top-level keys may be only
+ * those in `WORKSPACE_SETTINGS`, today `packages` and `catalog`, named as
+ * pnpm's parser names them. That also refuses an `overrides:` key here,
+ * BUG-25's route through this file; BUG-25's other parts are not checked
+ * here. `httpsProxy`, `strictSsl` and `ca` were not tried, and are refused
+ * by the list either way. D-144 gives the file a code owner in #105.
+ *
+ * Then a lone CR, found by #105's privacy-security-reviewer at e57543d. pnpm
+ * 10.33.0's reader breaks a line at a CR with no LF after it, as the YAML spec
+ * does; `yaml` 2.9.1 keeps it inside a scalar, with no error or warning. So
+ * `  - packages/*`, a CR, then `registries: {default: …}` was a registries
+ * key to pnpm (the audit exited 0 against the same server, 2026-10-26) and
+ * nothing to any check here. It is the fourth time the YAML model here has
+ * drifted from pnpm's, after escapes, the environment fill and a flow
+ * mapping. So two layers are added, and nothing is removed: `decodedYaml`
+ * refuses a lone CR in any YAML file it reads, workflows included; and
+ * `workspaceLines` reads pnpm-workspace.yaml with no YAML parser at all,
+ * against a grammar of today's line shapes, where a line that is none of
+ * them fails whatever a parser would make of it. The root .npmrc is pinned
+ * the same way, to its exact content. Deleting the decoded denylists now
+ * that the allowlists and the grammar exist (code-reviewer on #105) is
+ * follow-up 15.
+ *
+ * A correction, from the same review. The bundle first read for BUG-65,
+ * BUG-66 and BUG-67 was pnpm 10.28.0's (/opt/node-tools: the launcher, which
+ * hands over to the 10.33.0 that `packageManager` names), with
+ * `@zkochan/js-yaml` 0.0.9. Every claim here about pnpm's readers was read
+ * again on 2026-10-26 in 10.33.0's own bundle: its YAML reader is
+ * `@zkochan/js-yaml` 0.0.11, and every fixture's reading held; its .npmrc
+ * reader is the same `ini` 1.3.8. The end-to-end runs used the `pnpm`
+ * command, which is 10.33.0, and stand.
+ *
  * An ignore list is a quiet way to stop a gate from seeing anything, so these
  * tests read files instead of running the audit: a `pnpm audit` run reads the
  * registry's advisory data, which changes whenever an advisory is published, and
@@ -100,6 +176,49 @@
  *     or `_`; no file in the repository root has `pnpmfile` in its name; the
  *     root package.json's `pnpm` field has no `configDependencies`; and no
  *     workflow line outside a whole-line comment mentions any of those words;
+ *   - BUG-65's reading of the same files as pnpm and GitHub read them, beside
+ *     those text checks: pnpm-workspace.yaml parses, with no error and no tag
+ *     left unresolved, or is refused; none of its scalars, key or value, at
+ *     any depth, names one of those words once YAML has decoded it; no name
+ *     of a setting or a section in the root .npmrc does once `ini` has
+ *     decoded it as pnpm does; no key of either has `${` in it; and no line of
+ *     any workflow scalar, decoded, outside a whole-line comment, names one of
+ *     those words or runs an audit other than `pnpm audit --audit-level high`.
+ *     A folded `run: >` is decoded too, so `pnpm` and `audit` on lines of
+ *     their own are read as one command;
+ *   - BUG-66's allowlist: every name in the root .npmrc, as `ini` decodes it,
+ *     a `[section]`'s and the names inside it included, is in `RC_SETTINGS`
+ *     (today only `engine-strict`). Adding a setting is a change to this test,
+ *     in code-owned scripts/;
+ *   - BUG-67's allowlist: every top-level key of pnpm-workspace.yaml, named
+ *     as js-yaml names it (an alias followed, a sequence's items joined, a
+ *     `<<` kept as a key), is in `WORKSPACE_SETTINGS` (today `packages` and
+ *     `catalog`), and the file's top level is a mapping. Adding a setting is
+ *     a change to this test, in code-owned scripts/;
+ *   - BUG-67's lone CR: no YAML file read here holds a CR that is not part of
+ *     a CRLF line end;
+ *   - BUG-67's line grammar, with no YAML parser: every line of
+ *     pnpm-workspace.yaml, split on LF alone, is one of `WORKSPACE_LINE`'s
+ *     shapes in its place, so it holds no CR (a CRLF included), NEL, LS or
+ *     PS, no tab, no quote but around a scoped catalog name, no flow
+ *     collection, anchor, alias, tag or trailing comment, and no top-level
+ *     key but `packages:` and `catalog:`, each once. Adding a shape is a
+ *     change to this test, in code-owned scripts/;
+ *   - the root .npmrc is exactly `engine-strict=true` and a line feed;
+ *   - BUG-69's two settings, each with a named fixture: `scriptShell` in
+ *     pnpm-workspace.yaml is refused by the line grammar and
+ *     `WORKSPACE_SETTINGS`, and `script-shell` in the root .npmrc by
+ *     `RC_SETTINGS` (and by the byte pin above);
+ *   - BUG-69's package files: no .npmrc, pnpm-workspace.yaml or .pnpmfile.cjs
+ *     anywhere in the repository, read by walking the tree with no git
+ *     subprocess, `node_modules`, `.git` and `.stryker-tmp` skipped, but the
+ *     root's two and spikes/background-safety/app/pnpm-workspace.yaml, which
+ *     is outside the root workspace (`PNPM_SETTINGS_ALLOWED`);
+ *   - BUG-69's workspace list (B1): pnpm-workspace.yaml's `packages:` and the
+ *     root package.json's `workspaces` each name exactly `WORKSPACE_FOLDERS`,
+ *     with no glob; each named folder has a package.json that is a path the
+ *     owner must approve; and every folder under apps/ and packages/ with a
+ *     package.json is named in both;
  *   - D-093's premise, read from pnpm-lock.yaml (lockfile v9): the packages
  *     that depend on `node-forge` are exactly `@expo/cli` and
  *     `@expo/code-signing-certificates`, the second's only dependent is
@@ -165,8 +284,50 @@
  *
  * Not pinned:
  *   - the audit's result;
- *   - a `run:` written as a YAML folded scalar that puts `pnpm` and `audit` on
- *     different lines;
+ *   - that these tests run at all (BUG-69). In CI they run through
+ *     `pnpm run test:unit`, and pnpm 10.33.0 runs every script with the shell
+ *     named by `scriptShell` in pnpm-workspace.yaml, `script-shell` in the
+ *     root .npmrc, or a root .pnpmfile.cjs's `updateConfig` hook. With any one
+ *     of the three, every `pnpm run` check exits 0 having run nothing
+ *     (2026-10-26). These tests refuse all three (the line grammar and
+ *     `WORKSPACE_SETTINGS`, the byte pin and `RC_SETTINGS`, BUG-11's root
+ *     pnpmfile check), but not in a run they never reach. So in CI each
+ *     route is closed by the owner's review: D-144 makes all three
+ *     code-owned in #105, the pnpmfile before it exists. A check that runs
+ *     before pnpm in CI is queued as BUG-69's follow-up. A package's own
+ *     .npmrc or pnpm-workspace.yaml changes the shell for a run started in
+ *     that package's folder, and turbo runs every package script there: an
+ *     apps/server/.npmrc made its `typecheck` pass over a type error
+ *     (2026-10-26). That route is refused here (see the pinned list above),
+ *     and in CI only when this file runs, as for the root's;
+ *   - an audit command or a setting that a workflow builds while it runs:
+ *     shell quoting or variables (`pnpm "au"dit`), a GitHub expression
+ *     (`${{ … }}`) or a repository variable. A workflow is read as GitHub
+ *     decodes it, not as the shell runs it. Workflows have a code owner
+ *     (.github/), and pnpm-workspace.yaml and the .npmrc have one from D-144
+ *     (#105);
+ *   - a workflow that sets `npm_config_registry`, or another `npm_config_*`
+ *     variable whose name holds none of `ROUTE`'s words, or runs
+ *     `pnpm config set registry`: not checked here. Workflows are under the
+ *     code-owned .github/;
+ *   - a workspace package's `preinstall`, `install`, `postinstall` or
+ *     `prepare`: CI's `pnpm install --frozen-lockfile` runs it before the
+ *     audit, and it can rewrite .npmrc or the job's environment, which checks
+ *     of the checked-in files cannot see. Queued as BUG-68: install
+ *     with `--ignore-scripts` in the `security` job, and check the workspace
+ *     package.json files. Until then the owner's review stands in: with
+ *     D-144 (#105), every workspace package.json has a code owner;
+ *   - where `yaml` 2.9.1, the parser used here, and pnpm's read YAML
+ *     differently beyond the differences found (see `yamlLibrary`). For
+ *     pnpm-workspace.yaml the line grammar depends on neither. A workflow is
+ *     read by `yaml` alone: GitHub's reader was not compared;
+ *   - what an .npmrc in a workspace package would set: none may exist
+ *     (BUG-69, above), so none is read. A `registry` line in
+ *     apps/mobile/.npmrc did not redirect the audit (tried
+ *     2026-10-26). In pnpm-workspace.yaml a `registry` key did not either,
+ *     but `registries` did: BUG-67's route, now refused here by
+ *     `WORKSPACE_SETTINGS` (in CI, only when this file runs: BUG-69 above),
+ *     as is `lockfileDir`, reported by #105's privacy-security-reviewer;
  *   - pnpm settings outside the repository (a runner's own user or global
  *     config);
  *   - the spike's own lockfile, spikes/background-safety/app/pnpm-lock.yaml,
@@ -226,7 +387,10 @@
  *     dependencies (drizzle-kit is a server dev dependency).
  *
  * What pnpm does with these settings was read in pnpm 10.33.0's own bundle
- * (dist/pnpm.cjs), not assumed:
+ * (dist/pnpm.cjs), not assumed. (BUG-11 wrote this on 2026-10-02. On
+ * 2026-10-26 BUG-67 re-read the first two items, the audit's two ignore
+ * lists and the settings taken from package.json, in 10.33.0's bundle, and
+ * they hold; the pnpmfile item was not re-read.)
  *   - the audit drops an advisory when
  *     `auditConfig.ignoreGhsas.includes(github_advisory_id)` (an exact,
  *     case-sensitive match), or when it has CVEs and every one is in
@@ -234,8 +398,16 @@
  *     CVE; `pnpm audit --ignore` and `--ignore-unfixable` write `ignoreCves`
  *     and exit 0 instead of auditing;
  *   - `auditConfig` and `configDependencies` are read from the root
- *     package.json's `pnpm` field, and then every key of pnpm-workspace.yaml is
- *     assigned over the config as written;
+ *     package.json's `pnpm` field, and then every top-level key of
+ *     pnpm-workspace.yaml is assigned over the config. BUG-65 read how, and
+ *     BUG-67 read it again in pnpm 10.33.0's bundle on 2026-10-26 (see the
+ *     correction above): the file is parsed with `@zkochan/js-yaml` 0.0.11's
+ *     `load` (a js-yaml 4 fork) after a byte-order mark is stripped, and
+ *     `envReplace` (`@pnpm/config.env-replace` 3.0.2) is run over each
+ *     top-level key and each top-level string value first. The root .npmrc
+ *     is parsed with `ini` 1.3.8, through @pnpm/npm-conf and config-chain,
+ *     and `envReplace` (1.1.0, the same code for this) is run over each name.
+ *     `envReplace` throws on a `${NAME}` that is unset and has no fallback;
  *   - when it reads its config, pnpm loads `.pnpmfile.cjs` from the root (or
  *     the `pnpmfile` setting's file instead), the `globalPnpmfile` setting's
  *     file, and the `pnpmfile.cjs` of each config dependency named like a pnpm
@@ -247,13 +419,38 @@
  * If a pnpmfile or a config dependency is ever needed, this file failing is the
  * prompt to look at what it does to the audit.
  */
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { createRequire } from 'node:module';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, test } from 'vitest';
+import { OWNER_APPROVAL_PATHS } from './lib/merge-rules.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const read = (file) => readFileSync(path.join(root, file), 'utf8');
+
+/**
+ * The root .npmrc. A missing one is an error, never an empty file: read as
+ * empty, it passed every check of today's file here (test-auditor on #105
+ * renamed the path at each call, and all 44 tests still passed).
+ */
+const readRc = () => {
+  if (!existsSync(path.join(root, '.npmrc'))) {
+    throw new Error(
+      'the root .npmrc is missing: the tests of it here read the checked-in file, and a missing file is not a clean one',
+    );
+  }
+  return read('.npmrc');
+};
 
 /** The advisory the owner accepted on 2026-10-02 (D-093): node-forge's. */
 const ACCEPTED_ADVISORY = 'GHSA-86w9-cpqp-85rv';
@@ -417,6 +614,538 @@ function auditCommands(file, text) {
 /** The audit commands that are not the one allowed form. */
 function wrongAudits(audits) {
   return audits.filter(({ command }) => command !== AUDIT_COMMAND);
+}
+
+// --- BUG-65: the settings files, read as pnpm and GitHub read them -----------
+
+/**
+ * The `yaml` package, as Node resolves it for the root's own `vite`. No
+ * workspace package depends on a YAML library, and none resolves from
+ * scripts/. The lockfile resolves `yaml` 2.9.1 as vite's peer (the root
+ * importer's vite is `8.3.4(…)(yaml@2.9.1)`), and pnpm links it beside vite,
+ * so it is reached from vite's folder, as stryker-config.test.mjs reaches
+ * Stryker's modules: no dependency is added. It is loaded when first asked
+ * for: if that peer ever goes, the BUG-65 tests fail and say why, and nothing
+ * reads the files as clean.
+ *
+ * pnpm 10.33.0 reads pnpm-workspace.yaml with `@zkochan/js-yaml` 0.0.11, a
+ * fork of js-yaml 4 bundled into pnpm, which nothing here can load. (This
+ * said 0.0.9 until BUG-67: that is pnpm 10.28.0's, read by mistake.) Every
+ * fixture below was read with 0.0.11, taken from 10.33.0's bundle, on
+ * 2026-10-26. Each route word it decodes, `yaml` decodes too, except across a
+ * lone CR. The differences found are covered rather than modelled: js-yaml
+ * applies a `<<` merge and `yaml` does not, but every scalar is read where it
+ * is written, which is where a merge or an alias takes it from; js-yaml
+ * throws on a tag it does not know, where `yaml` warns, and a warning is
+ * refused here; a `!!binary` key is its bytes' numbers to js-yaml and their
+ * text here, which refuses more, not less; a CR with no LF after it is a line
+ * break to js-yaml and a character to `yaml`, and `decodedYaml` refuses it;
+ * and an undefined alias is an error to js-yaml, but to `yaml` only when it
+ * converts, which the walk never does. That drift is why `workspaceLines`
+ * reads the workspace file with no parser at all.
+ */
+const yamlLibrary = (() => {
+  let loaded = null;
+  return () => {
+    if (loaded !== null) return loaded;
+    try {
+      const fromRoot = createRequire(path.join(root, 'package.json'));
+      loaded = createRequire(fromRoot.resolve('vite/package.json'))('yaml');
+    } catch (error) {
+      throw new Error(
+        `BUG-65: no YAML parser resolves through the root's vite, so pnpm-workspace.yaml and the workflows cannot be read as pnpm and GitHub read them, and are not called clean: ${error.message}`,
+        { cause: error },
+      );
+    }
+    return loaded;
+  };
+})();
+
+/**
+ * The text of every scalar a key is made of: the key itself, the node an alias
+ * names, or each item of a sequence used as a key (js-yaml turns `? [a]` into
+ * the key `a`). A mapping used as a key gives none here: its own pairs are
+ * pairs the walk visits, and js-yaml reads it as `[object Object]`.
+ */
+function keyTexts(node, doc, seen = new Set()) {
+  const { isAlias, isScalar, isSeq } = yamlLibrary();
+  if (node === null || node === undefined || seen.has(node)) return [];
+  seen.add(node);
+  if (isAlias(node)) return keyTexts(node.resolve(doc), doc, seen);
+  if (isScalar(node)) return [String(node.value)];
+  if (isSeq(node)) return node.items.flatMap((item) => keyTexts(item, doc, seen));
+  return [];
+}
+
+/**
+ * A YAML file as a parser decodes it: the text of every scalar, key or value,
+ * at every depth, each once, where it is written; and the text of every key,
+ * an alias followed to what it names. A file that does not parse (a broken
+ * collection, a key twice, two documents), or holds what the parser does not
+ * resolve (an unknown tag), comes back in `unread`, never as clean.
+ */
+function decodedYaml(file, text) {
+  const { parseDocument, visit } = yamlLibrary();
+  const doc = parseDocument(text);
+  const unread = [...doc.errors, ...doc.warnings].map(
+    (problem) => `${file} is not read as clean: ${problem.message.split('\n')[0]}`,
+  );
+  // BUG-67: a CR with no LF after it breaks the line for the YAML spec and for
+  // pnpm's reader; `yaml` keeps it inside a scalar, with no error or warning.
+  const loneCr = /\r(?!\n)/.exec(text);
+  if (loneCr !== null) {
+    unread.push(
+      `${file} line ${text.slice(0, loneCr.index).split('\n').length} has a carriage return that is not part of a CRLF line end: the YAML spec, and pnpm's reader, break the line there, and this reader does not`,
+    );
+  }
+  const scalars = [];
+  const keys = [];
+  let topLevel = [];
+  if (doc.errors.length === 0) {
+    // Block bodies: a visitor that returns a number moves the walk to that index.
+    visit(doc, {
+      Scalar: (_, node) => {
+        // `yaml` gives `!!binary` as a Node Buffer, whose String is its bytes as UTF-8.
+        scalars.push(String(node.value));
+      },
+      Pair: (_, pair) => {
+        keys.push(...keyTexts(pair.key, doc));
+      },
+    });
+    topLevel = topLevelKeys(doc);
+  }
+  return { unread, scalars, keys, topLevel };
+}
+
+/**
+ * BUG-67: the top-level keys of a YAML document as js-yaml, pnpm's parser,
+ * names them (read again with the 0.0.11 loader from pnpm 10.33.0's bundle
+ * on 2026-10-26; first read with 10.28.0's 0.0.9, which agrees): a
+ * scalar's text, an alias's target, a sequence's items joined by commas, a
+ * mapping as `[object Object]`, an empty key as `null`. A `<<` stays a key of
+ * its own here, where js-yaml merges what it names into the top level. Null
+ * when the top level is not a mapping, which pnpm refuses.
+ */
+function topLevelKeys(doc) {
+  const { isAlias, isMap, isScalar, isSeq } = yamlLibrary();
+  const name = (node, seen = new Set()) => {
+    if (node === null || node === undefined || seen.has(node)) return 'null';
+    seen.add(node);
+    if (isAlias(node)) return name(node.resolve(doc), seen);
+    if (isScalar(node)) return String(node.value);
+    if (isSeq(node)) return node.items.map((item) => name(item, seen)).join(',');
+    if (isMap(node)) return '[object Object]';
+    return 'null';
+  };
+  if (doc.contents === null) return [];
+  return isMap(doc.contents) ? doc.contents.items.map((pair) => name(pair.key)) : null;
+}
+
+/** A decoded text that names an audit or hook setting, as a finding. */
+function decodedRoute(file, text) {
+  const word = ROUTE.exec(text);
+  return word === null ? [] : [`${file}: ${JSON.stringify(text)}, decoded, names ${word[0]}`];
+}
+
+/**
+ * A key with `${` in it, as a finding. pnpm runs `envReplace` over each
+ * top-level key of pnpm-workspace.yaml and over each name in .npmrc before it
+ * reads them, and `${NAME-fallback}` is the fallback when NAME is unset, so
+ * such a key can be any setting at all. Refused at every depth, not only at
+ * the top: no key here needs one.
+ */
+function fromEnvironment(file, key) {
+  return key.includes('${')
+    ? [
+        `${file}: the key ${JSON.stringify(key)} is filled in from the environment before pnpm reads it`,
+      ]
+    : [];
+}
+
+/**
+ * BUG-65: what in pnpm-workspace.yaml could set an audit setting or load a
+ * hook, read three ways. Its text against `ROUTE`, BUG-11's check, kept as a
+ * belt for whatever the parser reads differently from pnpm's (it refuses a
+ * comment too, as it always has; today's file has no match). Every scalar,
+ * decoded, against `ROUTE`. Every key against `${`. Every finding, or none.
+ */
+function workspaceRoutes(text) {
+  const file = 'pnpm-workspace.yaml';
+  const raw = ROUTE.exec(text);
+  const { unread, scalars, keys } = decodedYaml(file, text);
+  return [
+    ...(raw === null ? [] : [`${file} mentions ${raw[0]} in its text`]),
+    ...unread,
+    ...scalars.flatMap((scalar) => decodedRoute(file, scalar)),
+    ...keys.flatMap((key) => fromEnvironment(file, key)),
+  ];
+}
+
+/**
+ * BUG-67: the only top-level keys pnpm-workspace.yaml may hold. pnpm copies
+ * each into its settings, and the audit asks `registries.default`, so a
+ * `registries` key pointing at a server that reports no advisories passes the
+ * audit. Every other setting is refused too, whether or not it was ever shown
+ * to change the audit. The list stays short on purpose.
+ */
+const WORKSPACE_SETTINGS = new Set(['packages', 'catalog']);
+
+/**
+ * BUG-67: each top-level key of pnpm-workspace.yaml outside
+ * `WORKSPACE_SETTINGS`, as a finding, named as pnpm names it
+ * (`topLevelKeys`), so an escaped or quoted key, an alias or a sequence used
+ * as a key, and a `${…}` key are each read for what they are. A file that
+ * does not parse is refused through BUG-65's `unread`; one whose top level
+ * is not a mapping is refused here.
+ */
+function workspaceUnlisted(text) {
+  const file = 'pnpm-workspace.yaml';
+  const { unread, topLevel } = decodedYaml(file, text);
+  if (topLevel === null) return [...unread, `${file}'s top level is not a mapping of settings`];
+  return [
+    ...unread,
+    ...topLevel
+      .filter((key) => !WORKSPACE_SETTINGS.has(key))
+      .map(
+        (key) =>
+          `${file} sets ${JSON.stringify(key)}, which is not among the settings it may hold (${[...WORKSPACE_SETTINGS].join(', ')}): adding one is a change to this test, and scripts/ is code-owned, so the owner approves it`,
+      ),
+  ];
+}
+
+/**
+ * BUG-67: the shapes a line of pnpm-workspace.yaml may take, read from its raw
+ * text with no YAML parser. Every other check here reads the file through
+ * `yaml`, and that reading has drifted from pnpm's again and again: escapes,
+ * the environment fill, a flow mapping, a lone CR. A grammar of line shapes
+ * cannot drift that way: a line that is none of them fails, whatever a parser
+ * would make of it. The shapes are today's file's own: a blank line, a
+ * whole-line comment, `packages:` and `catalog:` (each once), a package glob
+ * under `packages:`, and a `name: range` entry under `catalog:`. A glob may not
+ * start with `!`, `*` or `@`, nor a range with `>`, `|` or `-`: YAML reads
+ * those as a tag, an alias, a reserved indicator, a folded or literal scalar,
+ * or a list item. Each of these claims has its own fixture in "each claim of
+ * the line grammar …", below. A sweep of 131 mutants of this grammar on
+ * 2026-10-26 (test-auditor on #105) left four alive, each of which changes
+ * no answer: the comment's `$`, and CR, LS or PS taken out of `LINE_BREAKS`.
+ */
+const WORKSPACE_LINE = {
+  blank: /^$/,
+  comment: /^ *#.*$/,
+  glob: /^ {2}- [A-Za-z0-9_.][A-Za-z0-9_./*@!-]*$/,
+  entry: /^ {2}(?:[A-Za-z0-9_.-]+|'[A-Za-z0-9_.@/-]+'): [0-9A-Za-z^~<=][0-9A-Za-z.^~<>=| +-]*$/,
+};
+
+/** The top-level keys the grammar lets a line open, each at most once. */
+const WORKSPACE_SECTIONS = ['packages', 'catalog'];
+
+/**
+ * The characters a YAML reader may break a line at, besides LF: CR, NEL, LS
+ * and PS. CR, LS and PS also match no shape's characters, and `.` does not
+ * match them, so only NEL, which `.` matches in a comment, needs this rule;
+ * the other three are refused twice.
+ */
+const LINE_BREAKS = [0x0d, 0x85, 0x2028, 0x2029].map((code) => String.fromCharCode(code));
+
+/** A line as JSON writes it, every character outside printable ASCII as a `\u` escape, so a CR, NEL, LS or PS shows. */
+function shown(line) {
+  return JSON.stringify(line).replace(
+    /[^\x20-\x7e]/g,
+    (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`,
+  );
+}
+
+/**
+ * BUG-67: each line of pnpm-workspace.yaml that is not one of
+ * `WORKSPACE_LINE`'s shapes in its place, as a finding. The text is split on
+ * LF alone, so a CR anywhere, a CRLF line end included, leaves a line that
+ * fits no shape; so does a NEL, LS or PS.
+ */
+function workspaceLines(text) {
+  const file = 'pnpm-workspace.yaml';
+  const opened = new Set();
+  let section = null;
+  const fits = (line) => {
+    if ([...line].some((c) => LINE_BREAKS.includes(c))) return false;
+    if (WORKSPACE_LINE.blank.test(line) || WORKSPACE_LINE.comment.test(line)) return true;
+    const header = WORKSPACE_SECTIONS.find((name) => line === `${name}:`);
+    if (header !== undefined) {
+      section = opened.has(header) ? null : header;
+      opened.add(header);
+      return section !== null;
+    }
+    if (!line.startsWith(' ')) {
+      section = null;
+      return false;
+    }
+    if (section === 'packages') return WORKSPACE_LINE.glob.test(line);
+    if (section === 'catalog') return WORKSPACE_LINE.entry.test(line);
+    return false;
+  };
+  return text
+    .split('\n')
+    .flatMap((line, i) =>
+      fits(line)
+        ? []
+        : [
+            `${file} line ${i + 1}, ${shown(line)}, is not a line this file may hold: adding a line shape is a change to this test, and scripts/ is code-owned, so the owner approves it`,
+          ],
+    );
+}
+
+/**
+ * `ini` 1.3.8's `unsafe`, through which it reads a name. A name in double
+ * quotes, or in single quotes around a JSON string, is `JSON.parse`d, so a
+ * `\u` escape in it is decoded; one that does not parse loses only its single
+ * quotes. An unquoted name ends at the first `;` or `#` no backslash escapes,
+ * and a backslash before `\`, `;` or `#` stands for that character.
+ */
+function rcUnquoted(written) {
+  let name = (written ?? '').trim();
+  if (
+    (name.startsWith('"') && name.endsWith('"')) ||
+    (name.startsWith("'") && name.endsWith("'"))
+  ) {
+    if (name.startsWith("'")) name = name.slice(1, -1);
+    try {
+      name = JSON.parse(name);
+    } catch {
+      // ini leaves a name that is not JSON as it is.
+    }
+    return String(name);
+  }
+  let unescaped = '';
+  let escaping = false;
+  for (const character of name) {
+    if (escaping) {
+      unescaped += '\\;#'.includes(character) ? character : `\\${character}`;
+      escaping = false;
+    } else if (character === ';' || character === '#') {
+      break;
+    } else if (character === '\\') {
+      escaping = true;
+    } else {
+      unescaped += character;
+    }
+  }
+  return (escaping ? `${unescaped}\\` : unescaped).trim();
+}
+
+/**
+ * The names of an rc file's settings and sections, as pnpm 10.33.0 reads the
+ * root .npmrc (first read in 10.28.0's bundle by mistake, then in 10.33.0's
+ * on 2026-10-26, whose `ini` 1.3.8 is the same code):
+ * @pnpm/npm-conf parses it with `ini` 1.3.8, whose `decode` splits the text
+ * on line breaks, skips a line that starts with `;` or `#`, and reads a
+ * `[section]`, or what comes before a line's first `=`, through `unsafe`
+ * (`rcUnquoted`). A name after a `[section]` is read too, though `ini` puts
+ * it inside that section rather than among pnpm's settings.
+ */
+function rcNames(text) {
+  const names = [];
+  for (const line of text.split(/[\r\n]+/g)) {
+    if (line === '' || /^\s*[;#]/.test(line)) continue;
+    const match = /^\[([^\]]*)\]$|^([^=]+)(=(.*))?$/.exec(line);
+    if (match !== null) names.push(rcUnquoted(match[1] ?? match[2]));
+  }
+  return names;
+}
+
+/**
+ * BUG-65: what in the root .npmrc could load a hook, read three ways: its text
+ * against `ROUTE`, BUG-11's check, kept, which refuses a comment as well; each
+ * name, decoded, against `ROUTE`; and each name against `${`.
+ */
+function rcRoutes(text) {
+  const raw = ROUTE.exec(text);
+  const names = rcNames(text);
+  return [
+    ...(raw === null ? [] : [`.npmrc mentions ${raw[0]} in its text`]),
+    ...names.flatMap((name) => decodedRoute('.npmrc', name)),
+    ...names.flatMap((name) => fromEnvironment('.npmrc', name)),
+  ];
+}
+
+/**
+ * BUG-66: the only settings the root .npmrc may hold. pnpm sends the audit to
+ * the registry this file names, so a `registry` line pointing at a server that
+ * reports no advisories passes the audit. Every other setting is refused
+ * too, whether or not it was ever shown to change the audit: a scoped
+ * registry, an auth line, a proxy, a certificate, a `[section]`. The list
+ * stays short on purpose.
+ */
+const RC_SETTINGS = new Set(['engine-strict']);
+
+/**
+ * BUG-66: each name in the root .npmrc outside `RC_SETTINGS`, as a finding.
+ * Every name `rcNames` decodes counts, a section's name and the names inside
+ * it included, so a quoted or escaped `registry` counts as `registry`.
+ */
+function rcUnlisted(text) {
+  return rcNames(text)
+    .filter((name) => !RC_SETTINGS.has(name))
+    .map(
+      (name) =>
+        `.npmrc sets ${JSON.stringify(name)}, which is not among the settings it may hold (${[...RC_SETTINGS].join(', ')}): adding one is a change to this test, and scripts/ is code-owned, so the owner approves it`,
+    );
+}
+
+/**
+ * BUG-69: the names of the files pnpm takes a folder's settings and hooks
+ * from. In the folder a script runs in, `script-shell` in an .npmrc or
+ * `scriptShell` in a pnpm-workspace.yaml names the shell pnpm runs it with;
+ * a .pnpmfile.cjs's `updateConfig` can set either.
+ */
+const PNPM_SETTINGS_FILES = ['.npmrc', 'pnpm-workspace.yaml', '.pnpmfile.cjs'];
+
+/**
+ * BUG-69: the only files of those names the repository may hold. The root's
+ * two are pinned by the tests of them here, and code-owned (D-144). The
+ * spike's is outside the root workspace, whose packages are all folders
+ * under apps/ and packages/, so pnpm and turbo at the root never run a script
+ * there.
+ */
+const PNPM_SETTINGS_ALLOWED = [
+  '.npmrc',
+  'pnpm-workspace.yaml',
+  'spikes/background-safety/app/pnpm-workspace.yaml',
+];
+
+/**
+ * BUG-69: the folders the walk below does not enter: installed packages, git's
+ * own, and `.stryker-tmp`, the gitignored copy of the repository, root files
+ * and all, that an interrupted mutation run leaves behind (test-auditor's N3
+ * on #105).
+ */
+const WALK_SKIPS = ['node_modules', '.git', '.stryker-tmp'];
+
+/**
+ * BUG-69: every file under the folder `top` named as one of
+ * `PNPM_SETTINGS_FILES`, as a path from `top` with `/` between folders,
+ * sorted. Folders named as in `WALK_SKIPS` are skipped, and a symbolic link
+ * to a folder is not followed. The tree is read as it is, with no git
+ * subprocess, so an untracked file is found too.
+ */
+function pnpmSettingsFiles(top) {
+  const found = [];
+  const walk = (dir) => {
+    for (const entry of readdirSync(path.join(top, dir), { withFileTypes: true })) {
+      const at = dir === '' ? entry.name : `${dir}/${entry.name}`;
+      if (entry.isDirectory()) {
+        if (!WALK_SKIPS.includes(entry.name)) walk(at);
+      } else if (PNPM_SETTINGS_FILES.includes(entry.name)) {
+        found.push(at);
+      }
+    }
+  };
+  walk('');
+  return found.toSorted();
+}
+
+/**
+ * BUG-69 (privacy-security-reviewer's B1 on #105): the workspace's packages,
+ * by folder. With `apps/*` and `packages/*` in pnpm-workspace.yaml and in the
+ * root package.json's `workspaces`, a pull request that adds only
+ * apps/<new>/package.json, which no CODEOWNERS line owns, adds a workspace
+ * package, and CI's `pnpm install --frozen-lockfile` runs its `preinstall`
+ * or `postinstall` in every required job. That script can write
+ * `script-shell=/bin/true` to the root .npmrc, and every `pnpm run` after it
+ * passes having run nothing (reproduced with pnpm 10.33.0, 2026-10-26; with
+ * the packages named, the install left the .npmrc alone). Named, a new
+ * package needs a line in both files, each code-owned (D-144), and each
+ * named package's package.json is a path the owner must approve.
+ */
+const WORKSPACE_FOLDERS = [
+  'apps/mobile',
+  'apps/server',
+  'packages/config',
+  'packages/contracts',
+  'packages/test-kit',
+];
+
+/** BUG-69: a workspace entry pnpm would expand as a glob, not read as one folder. */
+const WORKSPACE_GLOB = /[*?[\]{}!]/;
+
+/**
+ * BUG-69: the workspace's two lists as written: pnpm-workspace.yaml's
+ * `packages:`, as the YAML parser reads it (the line grammar holds every line
+ * of that file to shapes pnpm's parser reads the same way), and the root
+ * package.json's `workspaces`. A list that is missing or not a list of
+ * strings comes back as it is, and fails the comparisons below.
+ */
+function workspaceLists() {
+  return {
+    pnpm: yamlLibrary().parse(read('pnpm-workspace.yaml'))?.packages,
+    manifest: manifest.workspaces,
+  };
+}
+
+/**
+ * BUG-65: what in a workflow could set an audit setting or load a hook. Each
+ * line as written, outside a whole-line comment: BUG-11's check, kept. Then
+ * each line of each scalar as GitHub decodes it, a whole-line comment again
+ * skipped, as the shell skips it. `${` is not refused here: GitHub fills in
+ * `${{ … }}` in values, never in keys, and does not run pnpm's `envReplace`.
+ */
+function workflowRoutes(file, text) {
+  const { unread, scalars } = decodedYaml(file, text);
+  const decodedLines = scalars
+    .flatMap((scalar) => scalar.split('\n'))
+    .filter((line) => !/^\s*#/.test(line));
+  return [
+    ...text
+      .split('\n')
+      .filter((line) => !/^\s*#/.test(line) && ROUTE.test(line))
+      .map((line) => `${file}: ${line.trim()}`),
+    ...unread,
+    ...decodedLines.flatMap((line) => decodedRoute(file, line.trim())),
+  ];
+}
+
+/**
+ * BUG-65: the audit commands in a workflow, selected as BUG-11's
+ * `auditCommands` selects them, from its lines as written and from each
+ * scalar as GitHub decodes it: an escape in a double-quoted `run:`, or a
+ * folded `run: >` that puts `pnpm` and `audit` on lines of their own.
+ */
+function workflowAudits(file, text) {
+  const { scalars } = decodedYaml(file, text);
+  return [
+    ...auditCommands(file, text).map((audit) => ({ ...audit, read: 'as written' })),
+    ...scalars
+      .flatMap((scalar) => auditCommands(file, scalar))
+      .map((audit) => ({ ...audit, read: 'decoded' })),
+  ];
+}
+
+/**
+ * BUG-65's reproduction: pnpm-workspace.yaml in today's shape, with the line
+ * privacy-security-reviewer found on #105 at its end. Both keys are written
+ * with `\u` escapes inside double quotes, which YAML decodes, so pnpm reads
+ * `auditConfig.ignoreGhsas` from it while the text names neither. With the
+ * root package.json's auditConfig removed, `pnpm audit --audit-level high`
+ * exited 0 on it, "2 high (2 ignored)", in a scratch copy of #105's head
+ * (2026-10-26), and 1 without the line.
+ */
+const ESCAPED_WORKSPACE = String.raw`packages:
+  - apps/*
+  - packages/*
+
+catalog:
+  zod: ^4.6.6
+"audit\u0043onfig": {"ignore\u0047hsas": ["GHSA-86w9-cpqp-85rv", "GHSA-vfj7-8cjw-p6xm", "GHSA-mrhx-c7xc-m3w5"]}
+`;
+
+/**
+ * Every character of a word as a backslash escape: `\`, the letter, and the
+ * character's code point in hex, padded to `digits`. The default, `\u` with
+ * four digits, is the form both JSON and YAML decode; YAML also decodes `\x`
+ * with two digits and `\U` with eight.
+ */
+function asEscapes(word, letter = 'u', digits = 4) {
+  return [...word]
+    .map((c) => `\\${letter}${c.codePointAt(0).toString(16).padStart(digits, '0')}`)
+    .join('');
 }
 
 // --- The lockfile ------------------------------------------------------------
@@ -1782,8 +2511,10 @@ describe('the dependency audit ignores what the owner accepted, and nothing else
       read('pnpm-workspace.yaml'),
       "pnpm-workspace.yaml mentions an audit or hook setting: its keys are assigned over package.json's, so auditConfig there replaces the decided one, and a pnpmfile or config dependency can rewrite it",
     ).not.toMatch(ROUTE);
+    // RG-03: read through readRc, which refuses a missing .npmrc, where this
+    // read a missing one as empty and passed (test-auditor on #105).
     expect(
-      existsSync(path.join(root, '.npmrc')) ? read('.npmrc') : '',
+      readRc(),
       'the root .npmrc mentions an audit or hook setting: a pnpmfile it names is loaded for the audit, and its updateConfig hook can set auditConfig',
     ).not.toMatch(ROUTE);
     expect(
@@ -1808,6 +2539,995 @@ describe('the dependency audit ignores what the owner accepted, and nothing else
     );
 
     expect(mentions, 'a workflow mentions an audit or hook setting').toEqual([]);
+  });
+
+  test('BUG-65: a pnpm-workspace.yaml that sets auditConfig behind escaped keys is refused, as pnpm decodes them', () => {
+    // The line found on #105. pnpm reads the file with js-yaml, which decodes
+    // each `\u` escape to its letter: the keys it sees are auditConfig and
+    // ignoreGhsas.
+    expect(
+      ROUTE.test(ESCAPED_WORKSPACE),
+      'the fixture is the bypass: its text names no audit or hook setting',
+    ).toBe(false);
+    expect(workspaceRoutes(ESCAPED_WORKSPACE)).toEqual([
+      'pnpm-workspace.yaml: "auditConfig", decoded, names auditConfig',
+      'pnpm-workspace.yaml: "ignoreGhsas", decoded, names ignoreGhsas',
+    ]);
+  });
+
+  test('BUG-65: a pnpm-workspace.yaml key that pnpm fills in from the environment is refused', () => {
+    // pnpm runs envReplace over every top-level key of the file before it
+    // reads the settings, and `${NAME-fallback}` is the fallback when NAME is
+    // unset: this key is `pnpmfile`. `pnpm audit --audit-level high` loaded
+    // the hook it names, a file without "pnpmfile" in its name, and ran its
+    // updateConfig, which set auditConfig: exit 0, "2 high (2 ignored)"
+    // (2026-10-26).
+    const text = 'packages:\n  - apps/*\n"pnpm${TRYGG_UNSET-f}ile": hooks.cjs\n';
+    expect(ROUTE.test(text), 'the fixture names no audit or hook setting in its text').toBe(false);
+    expect(workspaceRoutes(text)).toEqual([
+      'pnpm-workspace.yaml: the key "pnpm${TRYGG_UNSET-f}ile" is filled in from the environment before pnpm reads it',
+    ]);
+  });
+
+  test('BUG-65: a root .npmrc that names a pnpmfile behind a quoted, escaped name or an environment variable is refused, as pnpm reads it', () => {
+    // pnpm's ini parser JSON-decodes a quoted name, and then fills in
+    // `${…}` from the environment. Each of these loaded hooks.cjs, whose
+    // updateConfig set auditConfig: `pnpm audit --audit-level high` exited 0,
+    // "2 high (2 ignored)" (2026-10-26).
+    const escaped = String.raw`engine-strict=true
+"\u0070npmfile"=hooks.cjs
+`;
+    const wrapped = String.raw`engine-strict=true
+'"\u0070npmfile"'=hooks.cjs
+`;
+    // RG-03: named `fromEnvironment` until code-reviewer on #105 found it
+    // shadowing the module's helper of that name; renamed, nothing else.
+    const envFilled = 'engine-strict=true\npnpm${TRYGG_UNSET-f}ile=hooks.cjs\n';
+    for (const text of [escaped, wrapped, envFilled]) {
+      expect(ROUTE.test(text), `the fixture names no hook setting in its text: ${text}`).toBe(
+        false,
+      );
+    }
+    // One assertion, so a failure shows every case at once.
+    expect({
+      escaped: rcRoutes(escaped),
+      wrapped: rcRoutes(wrapped),
+      envFilled: rcRoutes(envFilled),
+    }).toEqual({
+      escaped: ['.npmrc: "pnpmfile", decoded, names pnpmfile'],
+      wrapped: ['.npmrc: "pnpmfile", decoded, names pnpmfile'],
+      envFilled: [
+        '.npmrc: the key "pnpm${TRYGG_UNSET-f}ile" is filled in from the environment before pnpm reads it',
+      ],
+    });
+  });
+
+  test('BUG-65: a workflow that sets a pnpmfile, or runs another audit, behind YAML escapes is refused', () => {
+    // GitHub reads a workflow as YAML, so a double-quoted key or value reaches
+    // the runner decoded: an `npm_config_pnpmfile` variable, a
+    // `pnpm config set pnpmfile`, and a `pnpm audit --ignore-unfixable`, which
+    // writes ignoreCves and exits 0 instead of auditing.
+    const sample = String.raw`jobs:
+  security:
+    runs-on: ubuntu-latest
+    env:
+      "npm_config_\x70npmfile": hooks.cjs
+    steps:
+      - run: "pnpm config set \x70npmfile hooks.cjs"
+      - run: "pnpm \x61udit --ignore-unfixable"
+      - run: pnpm audit --audit-level high
+`;
+    // One assertion, so a failure shows both checks at once.
+    expect({
+      routes: workflowRoutes('sample.yml', sample),
+      audits: wrongAudits(workflowAudits('sample.yml', sample)).map(
+        (a) => `${a.read}: ${a.command}`,
+      ),
+    }).toEqual({
+      routes: [
+        'sample.yml: "npm_config_pnpmfile", decoded, names pnpmfile',
+        'sample.yml: "pnpm config set pnpmfile hooks.cjs", decoded, names pnpmfile',
+      ],
+      audits: ['decoded: pnpm audit --ignore-unfixable'],
+    });
+  });
+
+  test("BUG-65: today's pnpm-workspace.yaml, root .npmrc and workflows, read as pnpm and GitHub read them, set no audit setting and load no hook", () => {
+    // BUG-11's text checks above stay as they were; these read the same files
+    // decoded, with the text check kept inside each.
+    const workspace = read('pnpm-workspace.yaml');
+    // The parser read the file: it found the catalog's zod, so "no key names
+    // a setting" is read, not assumed.
+    expect(
+      decodedYaml('pnpm-workspace.yaml', workspace).keys,
+      'the YAML reader did not find the keys of pnpm-workspace.yaml',
+    ).toEqual(expect.arrayContaining(['packages', 'catalog', 'zod']));
+    expect(
+      workspaceRoutes(workspace),
+      "pnpm-workspace.yaml, read as pnpm reads it, sets an audit or hook setting: its keys are assigned over package.json's, so auditConfig there replaces the decided one, and a pnpmfile or config dependency can rewrite it",
+    ).toEqual([]);
+    // RG-03: read through readRc, which refuses a missing .npmrc, where this
+    // read a missing one as empty and passed (test-auditor on #105).
+    expect(
+      rcRoutes(readRc()),
+      'the root .npmrc, read as pnpm reads it, names a hook setting: a pnpmfile it names is loaded for the audit, and its updateConfig hook can set auditConfig',
+    ).toEqual([]);
+
+    const workflows = workflowFiles().map((file) => [file, read(`.github/workflows/${file}`)]);
+    expect(
+      workflows.flatMap(([file, text]) => workflowRoutes(file, text)),
+      'a workflow, read as GitHub decodes it, mentions an audit or hook setting',
+    ).toEqual([]);
+    const audits = workflows.flatMap(([file, text]) => workflowAudits(file, text));
+    expect(
+      wrongAudits(audits),
+      `a workflow, read as GitHub decodes it, runs pnpm audit other than as \`${AUDIT_COMMAND}\``,
+    ).toEqual([]);
+    // The decoded read found the audit that the line check finds, so "no
+    // other audit" is read, not assumed.
+    expect(
+      audits.filter((audit) => audit.read === 'decoded').map((audit) => audit.command),
+      'the decoded read of the workflows did not find the audit',
+    ).toContain(AUDIT_COMMAND);
+  });
+
+  test("BUG-65: the workspace check refuses an audit setting in pnpm-workspace.yaml however YAML writes its key, at any depth, and passes today's file and other settings", () => {
+    // No false positive: today's file, and one with settings pnpm reads that
+    // are none of these.
+    expect(workspaceRoutes(read('pnpm-workspace.yaml'))).toEqual([]);
+    expect(
+      workspaceRoutes(
+        'packages:\n  - apps/*\nonlyBuiltDependencies:\n  - esbuild\nsavePrefix: "~"\ncatalog:\n  "zod": ^4.6.6\n',
+      ),
+    ).toEqual([]);
+
+    // A plain key: the text check refuses it, as BUG-11's always has, and the
+    // decoded read does too.
+    expect(workspaceRoutes('auditConfig:\n  ignoreGhsas: [GHSA-86w9-cpqp-85rv]\n')).toEqual([
+      'pnpm-workspace.yaml mentions auditConfig in its text',
+      'pnpm-workspace.yaml: "auditConfig", decoded, names auditConfig',
+      'pnpm-workspace.yaml: "ignoreGhsas", decoded, names ignoreGhsas',
+    ]);
+
+    // Each route word, kebab and snake forms included, with every character
+    // written as each of YAML's three escapes for one. The text check sees
+    // none of them.
+    const escapes = [
+      ['x', 2],
+      ['u', 4],
+      ['U', 8],
+    ];
+    const words = [
+      'pnpmfile',
+      'globalPnpmfile',
+      'auditConfig',
+      'audit-config',
+      'audit_config',
+      'ignoreGhsas',
+      'ignore-ghsas',
+      'ignore_ghsas',
+      'ignoreCves',
+      'ignore-cves',
+      'ignore_cves',
+      'configDependencies',
+      'config-dependencies',
+      'config_dependencies',
+    ];
+    for (const word of words) {
+      for (const [form, digits] of escapes) {
+        const text = `packages:\n  - apps/*\n"${asEscapes(word, form, digits)}": x\n`;
+        expect(ROUTE.test(text), `${word}, each character as \\${form}: the text names it`).toBe(
+          false,
+        );
+        expect(workspaceRoutes(text), `${word}, each character as \\${form}`).toEqual([
+          `pnpm-workspace.yaml: "${word}", decoded, names ${ROUTE.exec(word)[0]}`,
+        ]);
+      }
+    }
+
+    // The same setting, escaped, in each place and form YAML allows a key.
+    // pnpm reads settings at the top only; the check refuses them at any depth.
+    const decodedAuditConfig = [
+      'pnpm-workspace.yaml: "auditConfig", decoded, names auditConfig',
+      'pnpm-workspace.yaml: "ignoreGhsas", decoded, names ignoreGhsas',
+    ];
+    const forms = {
+      'nested under a quoted top-level key': String.raw`"catalog":
+  zod: ^4.6.6
+  "\x61uditConfig":
+    "\x69gnoreGhsas": [GHSA-86w9-cpqp-85rv]
+`,
+      'in a flow mapping': String.raw`{packages: [apps/*], "\x61uditConfig": {"\x69gnoreGhsas": [GHSA-86w9-cpqp-85rv]}}
+`,
+      // js-yaml, pnpm's parser, merges these keys into the top level; `yaml`
+      // keeps `<<` as a key of its own. Read where they are written, they are
+      // refused either way.
+      'through a << merge key': String.raw`defaults: &defaults
+  "\x61uditConfig":
+    "\x69gnoreGhsas": [GHSA-86w9-cpqp-85rv]
+packages:
+  - apps/*
+<<: *defaults
+`,
+      'through an alias used as a key': String.raw`name: &setting "\x61uditConfig"
+*setting : {"\x69gnoreGhsas": [GHSA-86w9-cpqp-85rv]}
+`,
+      // js-yaml takes a tag on an explicit key or in a flow mapping; on a
+      // quoted key in a block it stops reading.
+      'with the !!str tag': String.raw`? !!str "\x61uditConfig"
+: {!!str "\x69gnoreGhsas": [GHSA-86w9-cpqp-85rv]}
+`,
+      // js-yaml turns `? [a]` into the key `a`.
+      'as a collection used as a key': String.raw`? ["\x61uditConfig"]
+: {"\x69gnoreGhsas": [GHSA-86w9-cpqp-85rv]}
+`,
+      'across an escaped line break in an explicit key': String.raw`? "audit\
+  Config"
+: {"\x69gnoreGhsas": [GHSA-86w9-cpqp-85rv]}
+`,
+    };
+    for (const [form, text] of Object.entries(forms)) {
+      expect(ROUTE.test(text), `${form}: the text names it`).toBe(false);
+      expect(workspaceRoutes(text), form).toEqual(decodedAuditConfig);
+    }
+
+    // A `!!binary` key: js-yaml reads it as its bytes' numbers, "97,117,…",
+    // which sets nothing, but its bytes spell auditConfig, and a key written
+    // to hide a word is not read as clean.
+    expect(workspaceRoutes('? !!binary YXVkaXRDb25maWc=\n: x\n')).toEqual([
+      'pnpm-workspace.yaml: "auditConfig", decoded, names auditConfig',
+    ]);
+  });
+
+  test('BUG-65: the workspace check refuses a key filled in from the environment, a tag it cannot resolve, and a file that does not parse', () => {
+    const filled =
+      'pnpm-workspace.yaml: the key "pnpm${TRYGG_UNSET-f}ile" is filled in from the environment before pnpm reads it';
+    // Through an alias used as a key, and nested, where pnpm would not fill it
+    // in: no key here needs one, so it is refused at any depth.
+    expect(workspaceRoutes('name: &hook "pnpm${TRYGG_UNSET-f}ile"\n*hook : hooks.cjs\n')).toEqual([
+      filled,
+    ]);
+    expect(workspaceRoutes('catalog:\n  "pnpm${TRYGG_UNSET-f}ile": x\n')).toEqual([filled]);
+    // A sequence used as a key: js-yaml turns `? [a]` into the key `a`, which
+    // pnpm then fills in. A mapping used as a key is `[object Object]` to
+    // js-yaml, which sets nothing, but its own key is a key, and is refused.
+    expect(workspaceRoutes('? ["pnpm${TRYGG_UNSET-f}ile"]\n: hooks.cjs\n')).toEqual([filled]);
+    expect(workspaceRoutes('? {"pnpm${TRYGG_UNSET-f}ile": x}\n: hooks.cjs\n')).toEqual([filled]);
+    // As a value, it names nothing: pnpm fills in a value but does not read
+    // it as a key.
+    expect(workspaceRoutes('catalog:\n  zod: ${TRYGG_UNSET-^4.6.6}\n')).toEqual([]);
+
+    // A tag the parser does not know: js-yaml throws on it, `yaml` warns, and
+    // the warning is refused, with or without a route word under it.
+    expect(
+      workspaceRoutes(String.raw`!custom "\x61uditConfig": x
+`),
+    ).toEqual([
+      expect.stringMatching(/^pnpm-workspace\.yaml is not read as clean: Unresolved tag: !custom/),
+      'pnpm-workspace.yaml: "auditConfig", decoded, names auditConfig',
+    ]);
+    expect(workspaceRoutes('!custom packages:\n  - apps/*\n')).toEqual([
+      expect.stringMatching(/^pnpm-workspace\.yaml is not read as clean: Unresolved tag: !custom/),
+    ]);
+
+    // A file that does not parse is refused, never read as clean: a flow
+    // mapping left open, a key twice, two documents. pnpm refuses each too.
+    for (const text of [
+      String.raw`"\x61uditConfig": {"\x69gnoreGhsas": [GHSA-86w9-cpqp-85rv]
+`,
+      'packages: [apps/*]\npackages: [packages/*]\n',
+      'packages: [apps/*]\n---\nx: 1\n',
+    ]) {
+      expect(workspaceRoutes(text), text).toEqual([
+        expect.stringMatching(/^pnpm-workspace\.yaml is not read as clean: /),
+      ]);
+    }
+  });
+
+  test("BUG-65: the .npmrc check reads names as pnpm's ini parser does, refuses a hook setting however its name is written, and passes today's file", () => {
+    // The names, as ini 1.3.8 reads them: comment lines skipped, a section's
+    // name, a quoted name JSON-decoded, one in single quotes that is not JSON
+    // left as it is, an unquoted one cut at `;` and unescaped.
+    const sample = [
+      'engine-strict=true',
+      '; skipped=1',
+      '# skipped=2',
+      '[section]',
+      `"${asEscapes('quoted')}"=3`,
+      `'"${asEscapes('wrapped')}"'=4`,
+      "'not json'=5",
+      'plain;comment=6',
+      'esc\\;aped=7',
+      'flag',
+    ].join('\n');
+    expect(rcNames(sample)).toEqual([
+      'engine-strict',
+      'section',
+      'quoted',
+      'wrapped',
+      'not json',
+      'plain',
+      'esc;aped',
+      'flag',
+    ]);
+
+    // No false positive: today's file, and other settings.
+    // RG-03: read through readRc, which refuses a missing .npmrc, where this
+    // read a missing one as empty and passed (test-auditor on #105).
+    expect(rcRoutes(readRc())).toEqual([]);
+    expect(
+      rcRoutes('engine-strict=true\nauto-install-peers=true\nstrict-peer-dependencies=false\n'),
+    ).toEqual([]);
+
+    // Plain: the text check refuses it, and the decoded name too.
+    expect(rcRoutes('pnpmfile=hooks.cjs\n')).toEqual([
+      '.npmrc mentions pnpmfile in its text',
+      '.npmrc: "pnpmfile", decoded, names pnpmfile',
+    ]);
+    expect(rcRoutes('global-pnpmfile=hooks.cjs\n')).toEqual([
+      '.npmrc mentions pnpmfile in its text',
+      '.npmrc: "global-pnpmfile", decoded, names pnpmfile',
+    ]);
+    // Every character escaped, as a setting and as a section.
+    expect(rcRoutes(`"${asEscapes('global-pnpmfile')}"=hooks.cjs\n`)).toEqual([
+      '.npmrc: "global-pnpmfile", decoded, names pnpmfile',
+    ]);
+    expect(rcRoutes(`["${asEscapes('pnpmfile')}"]\nx=1\n`)).toEqual([
+      '.npmrc: "pnpmfile", decoded, names pnpmfile',
+    ]);
+    // JSON first, then the environment: an escaped `$` still comes out as `${`.
+    expect(rcRoutes(`"pnpm${asEscapes('$')}{TRYGG_UNSET-f}ile"=hooks.cjs\n`)).toEqual([
+      '.npmrc: the key "pnpm${TRYGG_UNSET-f}ile" is filled in from the environment before pnpm reads it',
+    ]);
+    // A comment line: only the text check sees it, as BUG-11's always has.
+    expect(rcRoutes('; pnpmfile=hooks.cjs\n')).toEqual(['.npmrc mentions pnpmfile in its text']);
+  });
+
+  test('BUG-65: the workflow checks read each value as GitHub decodes it, a folded run: included, skip a shell comment as the line check does, and refuse a workflow that does not parse', () => {
+    const sample = String.raw`jobs:
+  security:
+    steps:
+      - run: >
+          pnpm
+          audit --ignore-unfixable
+      - run: |
+          # pnpm config set pnpmfile is not run: a comment
+          pnpm audit --audit-level high
+      - name: "\x70npmfile in a step's name"
+        run: echo
+`;
+    expect({
+      routes: workflowRoutes('sample.yml', sample),
+      audits: workflowAudits('sample.yml', sample).map((a) => `${a.read}: ${a.command}`),
+    }).toEqual({
+      routes: ['sample.yml: "pnpmfile in a step\'s name", decoded, names pnpmfile'],
+      audits: [
+        'as written: pnpm audit --audit-level high',
+        'decoded: pnpm audit --ignore-unfixable',
+        'decoded: pnpm audit --audit-level high',
+      ],
+    });
+    // A shell comment after the command, inside a decoded value: only a
+    // line that starts with `#` is skipped, because this one still runs.
+    const inlineComment = String.raw`jobs:
+  security:
+    steps:
+      - run: "pnpm config set \x70npmfile hooks.cjs # sets the hook"
+`;
+    expect(workflowRoutes('inline.yml', inlineComment)).toEqual([
+      'inline.yml: "pnpm config set pnpmfile hooks.cjs # sets the hook", decoded, names pnpmfile',
+    ]);
+    expect(workflowRoutes('bad.yml', 'jobs:\n  security: {runs-on: ubuntu-latest\n')).toEqual([
+      expect.stringMatching(/^bad\.yml is not read as clean: /),
+    ]);
+  });
+
+  test('BUG-66: a root .npmrc that points the registry elsewhere is refused', () => {
+    // Today's .npmrc with a registry line. pnpm sends the audit to the
+    // registry it names: a server that answered every request with no
+    // advisories made `pnpm audit --audit-level high` exit 0, "No known
+    // vulnerabilities found", where the unchanged file exits 1, "2 high"
+    // (2026-10-26).
+    const text = 'engine-strict=true\nregistry=http://127.0.0.1:48731/\n';
+    expect(
+      { text: ROUTE.test(text), bug65: rcRoutes(text) },
+      "the fixture passes today's checks: BUG-11's text check and BUG-65's decoded names",
+    ).toEqual({ text: false, bug65: [] });
+    expect(rcUnlisted(text)).toEqual([
+      '.npmrc sets "registry", which is not among the settings it may hold (engine-strict): adding one is a change to this test, and scripts/ is code-owned, so the owner approves it',
+    ]);
+  });
+
+  test('BUG-66: the root .npmrc holds only the settings it may (RC_SETTINGS)', () => {
+    // RG-03: read through readRc, which refuses a missing .npmrc, where this
+    // read a missing one as empty and passed (test-auditor on #105).
+    expect(
+      rcUnlisted(readRc()),
+      'the root .npmrc holds a setting outside RC_SETTINGS: pnpm reads it for the install and the audit, and a registry it names decides what the audit reports',
+    ).toEqual([]);
+  });
+
+  test("BUG-66: the .npmrc allowlist refuses every other setting, a section and a quoted or escaped name included, and passes engine-strict as pnpm's ini parser reads it", () => {
+    const unlisted = (name) =>
+      `.npmrc sets ${JSON.stringify(name)}, which is not among the settings it may hold (engine-strict): adding one is a change to this test, and scripts/ is code-owned, so the owner approves it`;
+    // engine-strict, however ini reads it; no file; and comments, which set
+    // nothing.
+    for (const text of [
+      'engine-strict=true\n',
+      'engine-strict = true\r\n',
+      '',
+      '; registry=http://127.0.0.1:48731/\n# registry=http://127.0.0.1:48731/\nengine-strict=true\n',
+    ]) {
+      expect(rcUnlisted(text), JSON.stringify(text)).toEqual([]);
+    }
+
+    // Each refused, by the name ini decodes; `registry[]`, which ini reads as
+    // a list named `registry`, by its name as written. Only `registry` was
+    // shown to change the audit; the rest are refused because they are not on
+    // the list.
+    const refused = {
+      'registry=http://127.0.0.1:48731/': 'registry',
+      '@trygghverdag:registry=http://127.0.0.1:48731/': '@trygghverdag:registry',
+      '//registry.npmjs.org/:_authToken=${NPM_TOKEN}': '//registry.npmjs.org/:_authToken',
+      'registry[]=http://127.0.0.1:48731/': 'registry[]',
+      [`"${asEscapes('registry')}"=http://127.0.0.1:48731/`]: 'registry',
+      [`'"${asEscapes('registry')}"'=http://127.0.0.1:48731/`]: 'registry',
+      "'registry'=http://127.0.0.1:48731/": 'registry',
+      'proxy=http://127.0.0.1:48732/': 'proxy',
+      'https-proxy=http://127.0.0.1:48732/': 'https-proxy',
+      'strict-ssl=false': 'strict-ssl',
+      'cafile=synthetic-ca.pem': 'cafile',
+      'noproxy=*': 'noproxy',
+    };
+    for (const [line, name] of Object.entries(refused)) {
+      expect(rcUnlisted(`engine-strict=true\n${line}\n`), line).toEqual([unlisted(name)]);
+    }
+    // A lone CR ends a line too: ini splits on `[\r\n]+`. This exact file made
+    // `pnpm audit --audit-level high` exit 0 against a registry reporting no
+    // advisories (2026-10-26). A CRLF, above, cannot tell the two apart.
+    expect(rcUnlisted('engine-strict=true\rregistry=http://127.0.0.1:48731/\n')).toEqual([
+      unlisted('registry'),
+    ]);
+    // A section is a name too, and refused; the allowed name inside it is not.
+    expect(rcUnlisted('[registry]\nengine-strict=true\n')).toEqual([unlisted('registry')]);
+    // An escaped `registry` passes BUG-65's checks: only the allowlist sees it.
+    const escaped = `engine-strict=true\n"${asEscapes('registry')}"=http://127.0.0.1:48731/\n`;
+    expect(rcRoutes(escaped)).toEqual([]);
+    expect(rcUnlisted(escaped)).toEqual([unlisted('registry')]);
+  });
+
+  test("BUG-67: a pnpm-workspace.yaml that points the audit's registry elsewhere is refused", () => {
+    // Today's file, its comments left out, with a `registries:` block. pnpm
+    // copies the file's top-level keys into its settings, and the audit goes
+    // to `registries.default`: a server that answered every request with no
+    // advisories made `pnpm audit --audit-level high` exit 0, "No known
+    // vulnerabilities found", where the unchanged file exits 1, "2 high"
+    // (2026-10-26).
+    const text = [
+      'packages:',
+      '  - apps/*',
+      '  - packages/*',
+      '',
+      'catalog:',
+      '  typescript: ~6.0.3',
+      '  vitest: ^5.0.1',
+      '  zod: ^4.6.6',
+      "  '@types/node': ^22.19.4",
+      'registries:',
+      '  default: http://127.0.0.1:48731/',
+      '',
+    ].join('\n');
+    expect(
+      { text: ROUTE.test(text), bug65: workspaceRoutes(text) },
+      "the fixture passes today's checks: BUG-11's text check and BUG-65's decoded read",
+    ).toEqual({ text: false, bug65: [] });
+    expect(workspaceUnlisted(text)).toEqual([
+      'pnpm-workspace.yaml sets "registries", which is not among the settings it may hold (packages, catalog): adding one is a change to this test, and scripts/ is code-owned, so the owner approves it',
+    ]);
+  });
+
+  test('BUG-67: the top-level keys of pnpm-workspace.yaml are only the settings it may hold (WORKSPACE_SETTINGS)', () => {
+    const workspace = read('pnpm-workspace.yaml');
+    // The reader found the top-level keys, so "no other key" is read, not
+    // assumed.
+    expect(
+      decodedYaml('pnpm-workspace.yaml', workspace).topLevel,
+      'the YAML reader did not find the top-level keys of pnpm-workspace.yaml',
+    ).toContain('packages');
+    expect(
+      workspaceUnlisted(workspace),
+      'pnpm-workspace.yaml sets a top-level key outside WORKSPACE_SETTINGS: pnpm copies each into its settings, and a `registries` key there decides where the audit asks',
+    ).toEqual([]);
+  });
+
+  test("BUG-67: the workspace allowlist refuses every other top-level key, however YAML writes it, and passes today's file", () => {
+    const unlisted = (key) =>
+      `pnpm-workspace.yaml sets ${JSON.stringify(key)}, which is not among the settings it may hold (packages, catalog): adding one is a change to this test, and scripts/ is code-owned, so the owner approves it`;
+    const today = 'packages:\n  - apps/*\n  - packages/*\ncatalog:\n  zod: ^4.6.6\n';
+    expect(workspaceUnlisted(read('pnpm-workspace.yaml'))).toEqual([]);
+    expect(workspaceUnlisted(today)).toEqual([]);
+
+    // Each refused by the name pnpm reads it as. `registries` was shown to
+    // redirect the audit; `lockfileDir` was reported to, by #105's
+    // privacy-security-reviewer; `overrides` here is BUG-25's route; the
+    // rest are refused because they are not on the list.
+    const refused = {
+      'registries:\n  default: http://127.0.0.1:48731/': 'registries',
+      "registries:\n  '@trygghverdag': http://127.0.0.1:48731/": 'registries',
+      'registry: http://127.0.0.1:48731/': 'registry',
+      'lockfileDir: sub': 'lockfileDir',
+      'overrides:\n  zod: 3.25.76': 'overrides',
+      'httpsProxy: http://127.0.0.1:48732/': 'httpsProxy',
+      'strictSsl: false': 'strictSsl',
+      'ca: synthetic-ca': 'ca',
+      'auditConfig:\n  ignoreGhsas: [GHSA-86w9-cpqp-85rv]': 'auditConfig',
+      '"registries":\n  default: http://127.0.0.1:48731/': 'registries',
+      [String.raw`"\x72egistries":
+  default: http://127.0.0.1:48731/`]: 'registries',
+      '? [registries]\n: {default: http://127.0.0.1:48731/}': 'registries',
+      '"regis${TRYGG_UNSET-t}ries":\n  default: http://127.0.0.1:48731/':
+        'regis${TRYGG_UNSET-t}ries',
+    };
+    for (const [block, key] of Object.entries(refused)) {
+      expect(workspaceUnlisted(`${today}${block}\n`), block).toEqual([unlisted(key)]);
+    }
+
+    // An alias used as a key, its anchor set on a catalog entry.
+    expect(
+      workspaceUnlisted(
+        'packages:\n  - apps/*\ncatalog:\n  zod: &setting registries\n*setting :\n  default: http://127.0.0.1:48731/\n',
+      ),
+    ).toEqual([unlisted('registries')]);
+    // A `<<` merge: js-yaml, pnpm's parser, merges `registries` into the top
+    // level; `yaml` keeps `<<` as a key. Both it and the key that holds the
+    // anchor are refused.
+    expect(
+      workspaceUnlisted(
+        'defaults: &defaults\n  registries:\n    default: http://127.0.0.1:48731/\npackages:\n  - apps/*\n<<: *defaults\n',
+      ),
+    ).toEqual([unlisted('defaults'), unlisted('<<')]);
+
+    // The whole file written as one flow mapping: its keys are the top-level
+    // keys all the same.
+    expect(workspaceUnlisted('{packages: [apps/*], catalog: {zod: ^4.6.6}}\n')).toEqual([]);
+    expect(
+      workspaceUnlisted(
+        '{packages: [apps/*], catalog: {zod: ^4.6.6}, registries: {default: http://127.0.0.1:48731/}}\n',
+      ),
+    ).toEqual([unlisted('registries')]);
+
+    // A file that does not parse is refused through BUG-65's `unread`, and a
+    // top level that is not a mapping, which pnpm refuses too, here.
+    expect(workspaceUnlisted('registries: {default: http://127.0.0.1:48731/\n')).toEqual([
+      expect.stringMatching(/^pnpm-workspace\.yaml is not read as clean: /),
+    ]);
+    expect(workspaceUnlisted('- apps/*\n')).toEqual([
+      "pnpm-workspace.yaml's top level is not a mapping of settings",
+    ]);
+  });
+
+  test('BUG-67: a lone CR in pnpm-workspace.yaml hides a registries key from the YAML reader, but not from pnpm', () => {
+    // #105's privacy-security-reviewer, at e57543d. pnpm 10.33.0's reader,
+    // `@zkochan/js-yaml` 0.0.11, breaks the line at a CR with no LF after it,
+    // as the YAML spec does, and reads `registries` as a top-level key:
+    // `pnpm audit --audit-level high` exited 0 against a registry reporting
+    // no advisories (2026-10-26). `yaml` 2.9.1 keeps the CR inside a plain
+    // scalar, with no error or warning.
+    const text = [
+      'packages:',
+      '  - apps/*',
+      '  - packages/*\rregistries: {default: "http://127.0.0.1:48731/"}',
+      '',
+      'catalog:',
+      '  typescript: ~6.0.3',
+      '  vitest: ^5.0.1',
+      '  zod: ^4.6.6',
+      "  '@types/node': ^22.19.4",
+      '',
+    ].join('\n');
+    expect(
+      { text: ROUTE.test(text), topLevel: decodedYaml('pnpm-workspace.yaml', text).topLevel },
+      'the fixture is the bypass: the YAML reader sees only packages and catalog',
+    ).toEqual({ text: false, topLevel: ['packages', 'catalog'] });
+    const crLine =
+      "pnpm-workspace.yaml line 3 has a carriage return that is not part of a CRLF line end: the YAML spec, and pnpm's reader, break the line there, and this reader does not";
+    expect({
+      routes: workspaceRoutes(text),
+      unlisted: workspaceUnlisted(text),
+      lines: workspaceLines(text),
+    }).toEqual({
+      routes: [crLine],
+      unlisted: [crLine],
+      lines: [
+        'pnpm-workspace.yaml line 3, "  - packages/*\\rregistries: {default: \\"http://127.0.0.1:48731/\\"}", is not a line this file may hold: adding a line shape is a change to this test, and scripts/ is code-owned, so the owner approves it',
+      ],
+    });
+  });
+
+  test('BUG-67: a lone CR in a workflow is refused: the YAML spec breaks the line there, and this reader does not', () => {
+    // `yaml` reads one key, "echo ok\rrun"; a reader that breaks at the CR
+    // reads a different workflow. Not shown to change a GitHub run; refused
+    // because the two readings differ.
+    const text =
+      'jobs:\n  security:\n    steps:\n      - echo ok\rrun: pnpm config set registry http://127.0.0.1:48731/\n      - run: pnpm audit --audit-level high\n';
+    expect(workflowRoutes('cr.yml', text)).toEqual([
+      "cr.yml line 4 has a carriage return that is not part of a CRLF line end: the YAML spec, and pnpm's reader, break the line there, and this reader does not",
+    ]);
+  });
+
+  test("BUG-67: the line grammar refuses every line shape but those today's file uses, without a YAML parser", () => {
+    // A copy of today's file with one more package glob and one more catalog
+    // entry: the shapes it already uses.
+    const grown = [
+      '# A comment.',
+      'packages:',
+      '  - apps/*',
+      '  - packages/*',
+      '  - tools/*',
+      '',
+      'catalog:',
+      '  typescript: ~6.0.3',
+      '  vitest: ^5.0.1',
+      '  zod: ^4.6.6',
+      "  '@types/node': ^22.19.4",
+      '  fast-check: ^4.10.2',
+      '',
+    ].join('\n');
+    expect(workspaceLines(grown)).toEqual([]);
+
+    const today = 'packages:\n  - apps/*\n  - packages/*\ncatalog:\n  zod: ^4.6.6\n';
+    const breakIn = (code) => `packages:\n  - apps/*${String.fromCharCode(code)}registries: x\n`;
+    const refused = {
+      'a lone CR': 'packages:\n  - apps/*\rregistries: {default: x}\ncatalog:\n  zod: ^4.6.6\n',
+      'a CRLF copy': today.replace(/\n/g, '\r\n'),
+      'a flow mapping': '{packages: [apps/*], catalog: {zod: ^4.6.6}}\n',
+      'a double-quoted key': 'packages:\n  - apps/*\n"catalog":\n  zod: ^4.6.6\n',
+      'an escaped key': String.raw`packages:
+  - apps/*
+"\x72egistries":
+  default: http://127.0.0.1:48731/
+`,
+      'an anchor and an alias': 'packages:\n  - &glob apps/*\n  - *glob\n',
+      'a tag': 'packages:\n  - !!str apps/*\n',
+      'a << merge': 'packages:\n  - apps/*\n<<: {registries: {default: x}}\n',
+      'a registries line': `${today}registries:\n  default: http://127.0.0.1:48731/\n`,
+      'a top-level overrides': `${today}overrides:\n  zod: ^4.6.6\n`,
+      'a tab-indented line': 'packages:\n\t- apps/*\n',
+      'an inline comment after a value': 'catalog:\n  zod: ^4.6.6 # pinned\n',
+      'a NEL': breakIn(0x85),
+      'an LS': breakIn(0x2028),
+      'a PS': breakIn(0x2029),
+      // YAML reads these first characters as a tag, an alias and a folded
+      // scalar, which is why a glob or a range may not start with them.
+      'a glob that starts with !': 'packages:\n  - !apps/*\n',
+      'a glob that starts with *': 'packages:\n  - */apps\n',
+      'a range that starts with >': 'catalog:\n  zod: >=4.6.6\n',
+      'packages: twice': `${today}packages:\n  - tools/*\n`,
+      'a catalog entry under packages': 'packages:\n  - apps/*\n  zod: ^4.6.6\n',
+      // test-auditor on #105, at a0c11ed: two claims the grammar's comment
+      // made that no fixture pinned, and the NEL above being refused by the
+      // glob's characters rather than by the line-break rule.
+      'a range that starts with |': 'catalog:\n  zod: |\n',
+      'a header with a value': 'packages: [apps/*]\n',
+      'a NEL inside a comment': '# x\x85registries: x',
+    };
+    // One assertion, so a failure names every fixture let through.
+    expect(
+      Object.entries(refused)
+        .filter(([, text]) => workspaceLines(text).length === 0)
+        .map(([name]) => name),
+      'let through by the line grammar',
+    ).toEqual([]);
+    // The YAML-reading checks let these through, so the grammar is the only
+    // layer that refuses them; they refuse the rest as well. Some set nothing
+    // pnpm reads (a CRLF, a NEL, a comment), but each is a shape this test
+    // does not need to read. The undefined alias `*/apps` is a parse error
+    // to pnpm's reader and none to `yaml`'s parseDocument: one more drift.
+    expect(
+      Object.entries(refused)
+        .filter(([, text]) => [...workspaceRoutes(text), ...workspaceUnlisted(text)].length === 0)
+        .map(([name]) => name),
+    ).toEqual([
+      'a CRLF copy',
+      'a flow mapping',
+      'a double-quoted key',
+      'an anchor and an alias',
+      'a tag',
+      'an inline comment after a value',
+      'a NEL',
+      'an LS',
+      'a PS',
+      'a glob that starts with *',
+      // RG-03: three entries added with test-auditor's three fixtures above,
+      // which the YAML-reading checks let through too. Nothing is removed.
+      'a range that starts with |',
+      'a header with a value',
+      'a NEL inside a comment',
+    ]);
+  });
+
+  test('BUG-67: each claim of the line grammar has a fixture that fails for that claim alone, or passes where the claim allows', () => {
+    // The line under test is the only one that may fail: it is added at the
+    // end of `packages:` (line 3), of `catalog:` (line 5), or at the top
+    // (line 1), among lines the grammar passes. Each entry is [text, lines
+    // refused].
+    const underPackages = (line) => `packages:\n  - apps/*\n${line}\ncatalog:\n  zod: ^4.6.6\n`;
+    const underCatalog = (line) => `packages:\n  - apps/*\ncatalog:\n  zod: ^4.6.6\n${line}\n`;
+    const atTop = (line) => `${line}\npackages:\n  - apps/*\n`;
+    const char = (code) => String.fromCharCode(code);
+    const claims = {
+      'lines split on LF alone: a CRLF line end ends no line': [
+        'packages:\r\n  - apps/*\r\n',
+        [1, 2],
+      ],
+      'the line-break rule: a NEL in a comment, which `.` matches': [
+        atTop(`# x${char(0x85)}registries: x`),
+        [1],
+      ],
+      'the line-break rule: a CR in a comment': [atTop('# x\rregistries: x'), [1]],
+      'the line-break rule: an LS in a comment': [atTop(`# x${char(0x2028)}registries: x`), [1]],
+      'the line-break rule: a PS in a comment': [atTop(`# x${char(0x2029)}registries: x`), [1]],
+      'a blank line is empty: not spaces': [underPackages('  '), [3]],
+      'a blank line may sit anywhere': [underPackages(''), []],
+      'a comment may follow spaces': [underPackages('  # a comment'), []],
+      'a comment may not follow a tab': [underPackages('\t# a comment'), [3]],
+      'a comment is a whole line: not after a glob': [underPackages('  - tools/* # x'), [3]],
+      'a comment is a whole line: not after an entry': [underCatalog('  vitest: ^5.0.1 # x'), [5]],
+      'a header is exactly `packages:`: not with a value': ['packages: [apps/*]\n', [1]],
+      'a header is exactly `catalog:`: not with a trailing space': [
+        'catalog: \n  zod: ^4.6.6\n',
+        [1, 2],
+      ],
+      '`packages:` at most once, and nothing under the second': [
+        'packages:\n  - apps/*\npackages:\n  - tools/*\n',
+        [3, 4],
+      ],
+      '`catalog:` at most once, and nothing under the second': [
+        'catalog:\n  zod: ^4.6.6\ncatalog:\n  vitest: ^5.0.1\n',
+        [3, 4],
+      ],
+      'no other top-level key, and nothing under one is in a section': [
+        'packages:\n  - apps/*\nregistries:\n  - tools/*\n',
+        [3, 4],
+      ],
+      'nothing indented before a header': ['  - apps/*\npackages:\n  - tools/*\n', [1]],
+      'a glob only under `packages:`': ['catalog:\n  - apps/*\n', [2]],
+      'an entry only under `catalog:`': ['packages:\n  zod: ^4.6.6\n', [2]],
+      'a glob is indented by two spaces: not three': [underPackages('   - tools/*'), [3]],
+      'a glob is indented by two spaces: not one': [underPackages(' - tools/*'), [3]],
+      'a glob follows `- `: not `-` alone': [underPackages('  -tools/*'), [3]],
+      'a glob is not empty': [underPackages('  - '), [3]],
+      'an entry is indented by two spaces: not three': [underCatalog('   vitest: ^5.0.1'), [5]],
+      'an entry is indented by two spaces: not one': [underCatalog(' vitest: ^5.0.1'), [5]],
+      'an entry has `: ` between name and range: not `:` alone': [
+        underCatalog('  vitest:^5.0.1'),
+        [5],
+      ],
+      'a range is not empty': [underCatalog('  vitest: '), [5]],
+      'a scoped name is single-quoted: not bare': [underCatalog('  @types/react: ^19.0.0'), [5]],
+      'a scoped name is single-quoted: not double-quoted': [
+        underCatalog('  "@types/react": ^19.0.0'),
+        [5],
+      ],
+    };
+    // Each character class, both ways: every character the comment allows
+    // passes, and every one of these others is refused, each in a line that
+    // fits but for it. Letters and digits are allowed in every class.
+    const others = [
+      '|',
+      '>',
+      '-',
+      '!',
+      '*',
+      '@',
+      '&',
+      '{',
+      '}',
+      '[',
+      ']',
+      ',',
+      '#',
+      "'",
+      '"',
+      ':',
+      '%',
+      '\t',
+      ' ',
+    ];
+    const classes = [
+      ['a glob first character', '_.', (c) => underPackages(`  - ${c}tools/*`), 3],
+      ['a glob character', '_./*@!-', (c) => underPackages(`  - tools/a${c}b`), 3],
+      ['a catalog name character', '_.-', (c) => underCatalog(`  vit${c}est: ^5.0.1`), 5],
+      [
+        'a quoted catalog name character',
+        '_.@/-',
+        (c) => underCatalog(`  '@types/re${c}act': ^19.0.0`),
+        5,
+      ],
+      ['a range first character', '^~<=', (c) => underCatalog(`  vitest: ${c}5.0.1`), 5],
+      ['a range character', '.^~<>=| +-', (c) => underCatalog(`  vitest: ^5.0${c}1`), 5],
+    ];
+    for (const [where, allowed, fixture, line] of classes) {
+      for (const c of allowed) claims[`${where} may be ${JSON.stringify(c)}`] = [fixture(c), []];
+      for (const c of others.filter((o) => !allowed.includes(o))) {
+        claims[`${where} may not be ${JSON.stringify(c)}`] = [fixture(c), [line]];
+      }
+    }
+    const refusedLines = (text) =>
+      workspaceLines(text).map((finding) => Number(/ line (\d+), /.exec(finding)[1]));
+    // One assertion, so a failure names every claim that no longer holds.
+    expect(
+      Object.fromEntries(
+        Object.entries(claims).map(([claim, [text]]) => [claim, refusedLines(text)]),
+      ),
+    ).toEqual(
+      Object.fromEntries(Object.entries(claims).map(([claim, [, lines]]) => [claim, lines])),
+    );
+
+    // The message quotes the line as JSON, every character outside printable
+    // ASCII as a `\u` escape, so a NEL shows.
+    expect(workspaceLines(`# x${char(0x85)}registries: x`)).toEqual([
+      'pnpm-workspace.yaml line 1, "# x\\' +
+        'u0085registries: x", is not a line this file may hold: adding a line shape is a change to this test, and scripts/ is code-owned, so the owner approves it',
+    ]);
+  });
+
+  test("BUG-67: today's pnpm-workspace.yaml holds only the line shapes it may (WORKSPACE_LINE)", () => {
+    expect(
+      workspaceLines(read('pnpm-workspace.yaml')),
+      'pnpm-workspace.yaml holds a line outside the shapes this test reads without a YAML parser: pnpm copies its top-level keys into its settings, and a line a parser reads differently from pnpm can hide one',
+    ).toEqual([]);
+  });
+
+  test('BUG-66, BUG-67: the root .npmrc is exactly `engine-strict=true`, compared byte for byte, with no parser to drift from pnpm', () => {
+    expect(
+      readRc(),
+      'the root .npmrc is not exactly "engine-strict=true\\n": pnpm reads its settings for the install and the audit. Changing it is a change to this test, and scripts/ is code-owned, so the owner approves it',
+    ).toBe('engine-strict=true\n');
+  });
+
+  test('BUG-69: a script shell set in pnpm-workspace.yaml or the root .npmrc is refused, by the line grammar and WORKSPACE_SETTINGS, and by RC_SETTINGS', () => {
+    // These checks protect only while they run. In CI they run through
+    // `pnpm run test:unit`, and either line below makes pnpm run every
+    // script with /bin/true, this file's run included, so the check goes
+    // green having run nothing (pnpm 10.33.0, 2026-10-26). There the
+    // code-owner lines of D-144 are what hold. The byte pin above refuses the
+    // .npmrc line too, and needs no fixture: it compares the file with one
+    // exact string, and failed on this line in a scratch copy (2026-10-26).
+    const workspace =
+      'packages:\n  - apps/*\n  - packages/*\ncatalog:\n  zod: ^4.6.6\nscriptShell: /bin/true\n';
+    const rc = 'engine-strict=true\nscript-shell=/bin/true\n';
+
+    expect(
+      {
+        text: [ROUTE.test(workspace), ROUTE.test(rc)],
+        bug65: [...workspaceRoutes(workspace), ...rcRoutes(rc)],
+      },
+      "the fixtures pass BUG-11's text check and BUG-65's decoded read: only the grammar and the allowlists refuse them",
+    ).toEqual({ text: [false, false], bug65: [] });
+    expect(workspaceLines(workspace)).toEqual([
+      'pnpm-workspace.yaml line 6, "scriptShell: /bin/true", is not a line this file may hold: adding a line shape is a change to this test, and scripts/ is code-owned, so the owner approves it',
+    ]);
+    expect(workspaceUnlisted(workspace)).toEqual([
+      'pnpm-workspace.yaml sets "scriptShell", which is not among the settings it may hold (packages, catalog): adding one is a change to this test, and scripts/ is code-owned, so the owner approves it',
+    ]);
+    expect(rcUnlisted(rc)).toEqual([
+      '.npmrc sets "script-shell", which is not among the settings it may hold (engine-strict): adding one is a change to this test, and scripts/ is code-owned, so the owner approves it',
+    ]);
+  });
+
+  test("BUG-69: no .npmrc, pnpm-workspace.yaml or .pnpmfile.cjs is in the repository but the root's two and the spike's workspace file, so no package's scripts run with a shell a pull request chose", () => {
+    // turbo runs each package's script from that package's folder, and pnpm
+    // reads the .npmrc and pnpm-workspace.yaml there. With a type error in
+    // apps/server, `pnpm exec turbo run typecheck
+    // --filter=@trygghverdag/server --force` exits 2; with an apps/server/.npmrc
+    // holding `script-shell=/bin/true` it exits 0, "4 successful" (pnpm
+    // 10.33.0, 2026-10-26; privacy-security-reviewer's S1 on #105). A
+    // package's pnpm-workspace.yaml with `scriptShell` did the same, by the
+    // reviewer's report. A package's .pnpmfile.cjs alone did not, and is
+    // refused all the same.
+    //
+    // The files this refuses cannot switch it off. It runs in the root
+    // Vitest run, which `pnpm run test:unit` starts from the root: a
+    // package's own file does not reach a run started there, and the root
+    // .npmrc, pnpm-workspace.yaml and Vitest configuration it does read are
+    // code-owned (D-082, D-144).
+    const found = pnpmSettingsFiles(root);
+
+    expect(found, 'the walk did not find the root .npmrc, so it read nothing').toContain('.npmrc');
+    expect(
+      found.filter((file) => !PNPM_SETTINGS_ALLOWED.includes(file)),
+      'a file that sets pnpm settings for the folder it is in: a script run there, as turbo runs every package script, can be given a shell that runs nothing',
+    ).toEqual([]);
+  });
+
+  test('BUG-69: the walk finds each of those files in a package folder and deeper, skips node_modules, .git and .stryker-tmp, and passes a tree with none', () => {
+    const top = mkdtempSync(path.join(tmpdir(), 'bug-69-'));
+    const put = (file) => {
+      mkdirSync(path.dirname(path.join(top, file)), { recursive: true });
+      writeFileSync(path.join(top, file), 'synthetic\n');
+    };
+    try {
+      put('apps/server/package.json');
+      put('apps/server/src/index.ts');
+      expect(pnpmSettingsFiles(top), 'a tree with none').toEqual([]);
+
+      put('apps/server/.npmrc');
+      put('packages/contracts/pnpm-workspace.yaml');
+      put('packages/contracts/src/deep/.pnpmfile.cjs');
+      put('apps/server/node_modules/some-package/.npmrc');
+      put('.git/hooks/.npmrc');
+      put('.stryker-tmp/sandbox-synthetic/.npmrc');
+      put('.stryker-tmp/sandbox-synthetic/apps/server/.npmrc');
+      put('apps/server/.npmrc.bak');
+      expect(pnpmSettingsFiles(top)).toEqual([
+        'apps/server/.npmrc',
+        'packages/contracts/pnpm-workspace.yaml',
+        'packages/contracts/src/deep/.pnpmfile.cjs',
+      ]);
+    } finally {
+      rmSync(top, { recursive: true, force: true });
+    }
+  });
+
+  test('BUG-69: pnpm-workspace.yaml and package.json each name exactly the five package folders, with no glob, so a new folder under apps/ or packages/ is no workspace package until the owner approves a line for it', () => {
+    const lists = workspaceLists();
+    const globs = (list) =>
+      (Array.isArray(list) ? list : [list]).filter((entry) => WORKSPACE_GLOB.test(String(entry)));
+
+    expect(
+      { pnpm: globs(lists.pnpm), manifest: globs(lists.manifest) },
+      'workspace entries that are globs: a pull request that adds a package.json under one becomes a workspace package, and CI installs it and runs its install scripts with no owner approving it (B1)',
+    ).toEqual({ pnpm: [], manifest: [] });
+    expect({
+      pnpm: Array.isArray(lists.pnpm) ? lists.pnpm.toSorted() : lists.pnpm,
+      manifest: Array.isArray(lists.manifest) ? lists.manifest.toSorted() : lists.manifest,
+    }).toEqual({ pnpm: WORKSPACE_FOLDERS, manifest: WORKSPACE_FOLDERS });
+  });
+
+  test("BUG-69: each package folder the workspace names has a package.json, and it is a path the owner must approve, so a named package's install scripts cannot change unseen", () => {
+    const lists = workspaceLists();
+    const named = [
+      ...new Set([
+        ...WORKSPACE_FOLDERS,
+        ...(Array.isArray(lists.pnpm) ? lists.pnpm : []),
+        ...(Array.isArray(lists.manifest) ? lists.manifest : []),
+      ]),
+    ];
+    // An owner path covers a file when it is that file, or a folder it is in.
+    const owned = (file) =>
+      OWNER_APPROVAL_PATHS.some(
+        (owner) => owner === `/${file}` || (owner.endsWith('/') && `/${file}`.startsWith(owner)),
+      );
+
+    expect(
+      named.filter((folder) => !existsSync(path.join(root, String(folder), 'package.json'))),
+      'workspace entries that are not a folder with a package.json',
+    ).toEqual([]);
+    expect(
+      named.map((folder) => `${folder}/package.json`).filter((file) => !owned(file)),
+      "workspace packages whose package.json is no path the owner must approve: its install scripts run in CI's install",
+    ).toEqual([]);
+  });
+
+  test('BUG-69: every folder under apps/ and packages/ that has a package.json is one both workspace lists name, so none is left out of the workspace unseen', () => {
+    const lists = workspaceLists();
+    const names = (list, folder) => Array.isArray(list) && list.includes(folder);
+    const found = ['apps', 'packages'].flatMap((parent) =>
+      readdirSync(path.join(root, parent), { withFileTypes: true })
+        .filter(
+          (entry) =>
+            entry.isDirectory() && existsSync(path.join(root, parent, entry.name, 'package.json')),
+        )
+        .map((entry) => `${parent}/${entry.name}`),
+    );
+
+    // The walk found the packages, so "none is left out" is read, not assumed.
+    expect(found, 'the walk found no package under apps/').toContain('apps/server');
+    expect(
+      found.filter((folder) => !names(lists.pnpm, folder) || !names(lists.manifest, folder)),
+      'folders with a package.json that pnpm-workspace.yaml or package.json does not name',
+    ).toEqual([]);
   });
 
   test("BUG-11: D-093's premise holds in the lockfile: node-forge comes only through Expo's command-line tool, at a version the advisory covers", () => {

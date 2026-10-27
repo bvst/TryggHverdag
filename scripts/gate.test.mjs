@@ -566,9 +566,10 @@ describe("this repository's own workflows", () => {
    * amendment), and both halves are pinned in the tests below.
    *
    * One list for both halves: the paths D-102 gives the owner are /apps/
-   * owner paths the safety filter leaves out. With D-139's nine below they
-   * are the only ones, pinned exactly in the filter test below, so a further
-   * exception has to show itself there, in a test change with its own reason.
+   * owner paths the safety filter leaves out. With D-139's nine and D-144's
+   * one below they are the only ones, SAFETY_FILTER_EXCEPTIONS, pinned exactly
+   * in the filter test below, so a further exception has to show itself
+   * there, in a test change with its own reason.
    * (Until LOST-01's code review this was two lists, D102_FILES and
    * NOT_IN_SAFETY_FILTER, and a test held one equal to the other.)
    */
@@ -610,6 +611,70 @@ describe("this repository's own workflows", () => {
     '/apps/server/src/redact.ts',
   ];
   const D139_APPS_FILES = D139_FILES.filter((owned) => owned.startsWith('/apps/'));
+
+  /**
+   * BUG-69 (D-144): every CI check runs through `pnpm run`, the unit run that
+   * holds scripts/dependency-audit.test.mjs among them. pnpm 10.33.0 takes the
+   * shell it hands each script to from `scriptShell` in pnpm-workspace.yaml,
+   * `script-shell` in the root .npmrc, or a root .pnpmfile.cjs whose
+   * updateConfig hook sets it. One line in any of them, and every check goes
+   * green having run nothing (reproduced with pnpm 10.33.0, 2026-10-26: a
+   * script that exits 1 exited 0 and did not run). None of the three had a
+   * code owner, and the tests that refuse those lines are the ones the shell
+   * skips. pnpm-lock.yaml decides what the install fetches and what the audit
+   * reads. The two workspace package.json files had no owner, and their
+   * install scripts run in CI before the audit (BUG-68); /package.json and
+   * /apps/mobile/package.json were owned already. The owner decided all six
+   * on 2026-10-26 (D-144). Written as OWNER_APPROVAL_PATHS writes a path:
+   * from the root.
+   *
+   * /.pnpmfile.cjs does not exist, and must not: BUG-11's test in
+   * scripts/dependency-audit.test.mjs refuses any root file with "pnpmfile"
+   * in its name. It is owned before it exists, as SEC-06's /.gitleaks.toml
+   * is, because the pull request that adds one is the one to stop. Its hook
+   * can stop the very `pnpm run` that would run BUG-11's test.
+   *
+   * One list for both halves, as D139_FILES is: the one /apps/ path among the
+   * six, /apps/server/package.json, is read from it as a named exception in
+   * the filter test below, not copied. The pair of BUG-69 tests after BUG-8's
+   * reads all six.
+   */
+  const D144_FILES = [
+    '/pnpm-workspace.yaml',
+    '/pnpm-lock.yaml',
+    '/.npmrc',
+    '/.pnpmfile.cjs',
+    '/apps/server/package.json',
+    '/packages/contracts/package.json',
+  ];
+  const D144_APPS_FILES = D144_FILES.filter((owned) => owned.startsWith('/apps/'));
+  /** The one D-144 path that is owned while absent: a root pnpmfile is refused, not kept. */
+  const ABSENT_PNPMFILE = '/.pnpmfile.cjs';
+
+  // BUG-69 (D-144; test-auditor's S1 on #105): D144_FILES owns
+  // /.pnpmfile.cjs, the one pnpmfile pnpm 10 loads from the root by default.
+  // pnpm 11 looks for .pnpmfile.mjs first, by test-auditor's reading of pnpm
+  // 11.25.0's bundle (not run here), so a routine move to pnpm 11 would leave
+  // a root .pnpmfile.mjs with no owner. The pin holds because /package.json,
+  // where packageManager is written, is owned: the move itself needs the
+  // owner, and this failure tells them what to check first.
+  test("BUG-69: the root package.json's packageManager is pnpm 10, the major whose default pnpmfile, /.pnpmfile.cjs, D-144 owns", () => {
+    const { packageManager } = JSON.parse(readFileSync('package.json', 'utf8'));
+
+    expect(
+      packageManager,
+      'packageManager is not pnpm 10.x. Before moving to another major, check which pnpmfile names that version loads by default and give each one an owner (D-144): pnpm 11 reads /.pnpmfile.mjs, as reported from its bundle and not run here',
+    ).toMatch(/^pnpm@10\./);
+  });
+
+  /**
+   * The /apps/ owner paths the safety filter leaves out by name: D-102's,
+   * D-139's and D-144's. One list, read by the filter test below, which pins
+   * it exactly, and by the guard tests that keep each D-141 folder out of it,
+   * so a guard cannot read fewer exceptions than the filter test excuses
+   * (test-auditor on #105).
+   */
+  const SAFETY_FILTER_EXCEPTIONS = [...D102_FILES, ...D139_APPS_FILES, ...D144_APPS_FILES];
 
   test('the safety filter in ai-review.yml matches the paths the owner must approve', () => {
     // Two copies of the same list: the paths CODEOWNERS holds for the owner,
@@ -659,13 +724,24 @@ describe("this repository's own workflows", () => {
     // required in the filter. The two /packages/contracts/ files of the
     // eleven are not /apps/ paths, so they are not excepted here: this test
     // does not read them.
+    //
+    // One more, by Claude's choice under D-144 (D-031), as D-139's:
+    // /apps/server/package.json, D144_APPS_FILES. It holds dependencies and
+    // scripts, not safety logic. Dependencies are in the brief of
+    // privacy-security-reviewer, which runs on every pull request; install
+    // scripts are not named there, and BUG-68's fix in CI is what closes
+    // that. Leaving the filter alone keeps ai-review.yml out of #105, so CI's
+    // reviewers can still run on it (D-075).
+    // RG-03 (BUG-69, D-144): this narrows the test by that one file and no
+    // other. The pin stays exact, now at eleven, and every other /apps/ owner
+    // path is still required in the filter.
     const text = readFileSync(`${WORKFLOWS}/ai-review.yml`, 'utf8');
     const safety = filterEntries(text, 'safety');
     const appsPaths = OWNER_APPROVAL_PATHS.filter((p) => p.startsWith('/apps/'));
-    const exceptions = [...D102_FILES, ...D139_APPS_FILES];
+    const exceptions = SAFETY_FILTER_EXCEPTIONS;
     const safetyPaths = appsPaths.filter((p) => !exceptions.includes(p));
 
-    expect(exceptions, 'the named exceptions (D-102, amended; D-139, amended)').toEqual([
+    expect(exceptions, 'the named exceptions (D-102, amended; D-139, amended; D-144)').toEqual([
       '/apps/server/src/log.ts',
       '/apps/server/src/config.ts',
       '/apps/server/src/bin/api.ts',
@@ -676,6 +752,7 @@ describe("this repository's own workflows", () => {
       '/apps/mobile/package.json',
       '/apps/mobile/src/features/grp/join-key.ts',
       '/apps/server/src/redact.ts',
+      '/apps/server/package.json',
     ]);
     expect(safety.headers, 'how many filters are named safety').toBe(1);
     expect(safety.unreadable).toEqual([]);
@@ -688,6 +765,7 @@ describe("this repository's own workflows", () => {
     // would leave the pin above passing over a list that means nothing.
     // RG-03 (GRP-01, D-139): it reads every named exception now, D-139's
     // nine with log.ts, not D102_FILES alone; it is no looser for log.ts.
+    // D-144's one is read the same way.
     expect(
       exceptions.filter((p) => !appsPaths.includes(p)),
       'each named exception is an /apps/ path the owner must approve',
@@ -952,6 +1030,65 @@ describe("this repository's own workflows", () => {
     ]) {
       expect(ownersOf(file), file).not.toEqual([]);
     }
+  });
+
+  // BUG-69 (D-144): the six paths that steer pnpm, and their ownership, pinned
+  // with D144_FILES (declared beside D139_FILES, above the safety filter
+  // test, which names its one /apps/ path as an exception).
+
+  test('BUG-69: the files pnpm reads its settings and hooks from, and the two workspace package.json files without an owner, are paths the owner must approve (D-144)', () => {
+    const present = D144_FILES.filter((owned) => owned !== ABSENT_PNPMFILE);
+    const listed = spawnSync('git', ['ls-files', '--', ...present.map((owned) => owned.slice(1))], {
+      encoding: 'utf8',
+    });
+
+    expect(D144_FILES, 'the root pnpmfile is among the six').toContain(ABSENT_PNPMFILE);
+    // The five that exist: git tracks each as a file of its own, so a path
+    // misspelt alike here, in OWNER_APPROVAL_PATHS and in CODEOWNERS cannot
+    // pass as owned while the real file stays unowned.
+    expect(listed.status, listed.stderr).toBe(0);
+    expect(listed.stdout.split('\n').filter((file) => file !== '')).toEqual(
+      present.map((owned) => owned.slice(1)).toSorted(),
+    );
+    // The sixth is owned while absent, and stays absent: nothing on disk and
+    // nothing git tracks.
+    expect(
+      statSync(ABSENT_PNPMFILE.slice(1), { throwIfNoEntry: false }),
+      `${ABSENT_PNPMFILE} exists: BUG-11 refuses a root pnpmfile, which pnpm loads for every command`,
+    ).toBeUndefined();
+    expect(
+      spawnSync('git', ['ls-files', '--', ABSENT_PNPMFILE.slice(1)], { encoding: 'utf8' }).stdout,
+    ).toBe('');
+    expect(
+      D144_FILES.filter((owned) => !OWNER_APPROVAL_PATHS.includes(owned)),
+      'paths D-144 gives the owner that OWNER_APPROVAL_PATHS does not hold',
+    ).toEqual([]);
+  });
+
+  test("BUG-69: .github/CODEOWNERS gives each of them to the owner: each has one line of its own naming @bvst and @urso-agent, gate:integrity finds every owner-approval path owned, and under GitHub's last-match rule the line matching each names @bvst @urso-agent (D-144)", () => {
+    const text = readFileSync('.github/CODEOWNERS', 'utf8');
+    const rules = codeownersRules(text);
+    const ownersOf = lastMatchOwners(text);
+
+    expect(reviewCodeowners(text)).toEqual([]);
+    // The reading is checked on the root's own package.json first: owned by
+    // its own line, which must not be read as covering the workspace
+    // packages' package.json files below.
+    expect(ownersOf('package.json')).toEqual(OWNERS);
+    expect(
+      D144_FILES.map((owned) => [
+        owned,
+        rules.filter((rule) => rule.pattern === owned).map((rule) => rule.owners),
+      ]),
+      'the lines of .github/CODEOWNERS whose pattern is each path',
+    ).toEqual(D144_FILES.map((owned) => [owned, [OWNERS]]));
+    // A path that does not exist is matched like any other, so the absent
+    // pnpmfile is asked about too: a later ownerless line cannot undo any of
+    // the six.
+    expect(
+      D144_FILES.map((owned) => [owned, ownersOf(owned.slice(1))]),
+      'the owners the last line of .github/CODEOWNERS matching each path gives it',
+    ).toEqual(D144_FILES.map((owned) => [owned, OWNERS]));
   });
 
   // BUG-10 (D-092, D-094, D-095): SM-01 put journey guarantees in files no
@@ -1551,11 +1688,15 @@ describe("this repository's own workflows", () => {
 
   test('CALL-01-AC9: apps/mobile/src/features/call/ is not among the named exceptions the safety filter test leaves out of the filter, as D-141 decided', () => {
     // A guard, not a red test: it passes before step 1's code as after it, by
-    // design. The folder is a safety-review path, unlike D-102's and D-139's
-    // ten, so no named exception may be it, lie in it or hold it. The
-    // exceptions are read as the safety filter test reads them, from
-    // D102_FILES and D139_APPS_FILES, declared in this describe above it.
-    const exceptions = [...D102_FILES, ...D139_APPS_FILES];
+    // design. The folder is a safety-review path, unlike the eleven named
+    // exceptions, so no named exception may be it, lie in it or hold it. The
+    // exceptions are the safety filter test's own list,
+    // SAFETY_FILTER_EXCEPTIONS, declared in this describe above it.
+    // RG-03 (BUG-69, test-auditor on #105): this read a copy,
+    // [...D102_FILES, ...D139_APPS_FILES], which missed D-144's
+    // /apps/server/package.json once the filter test excused it. It reads one
+    // more file now, so it is stricter or equal.
+    const exceptions = SAFETY_FILTER_EXCEPTIONS;
 
     expect(exceptions.length).toBeGreaterThan(0);
     expect(
@@ -1664,7 +1805,10 @@ describe("this repository's own workflows", () => {
     // design, as CALL-01-AC9's above does. D-139's two shared/ files,
     // secure-storage.ts and api/client.ts, are named exceptions beside the
     // folder, not in it; no exception may be the folder, lie in it or hold it.
-    const exceptions = [...D102_FILES, ...D139_APPS_FILES];
+    // RG-03 (BUG-69, test-auditor on #105): reads SAFETY_FILTER_EXCEPTIONS,
+    // the filter test's own list, where it copied D-102's and D-139's alone:
+    // one more file, so stricter or equal.
+    const exceptions = SAFETY_FILTER_EXCEPTIONS;
 
     expect(exceptions.length).toBeGreaterThan(0);
     expect(
@@ -1766,7 +1910,10 @@ describe("this repository's own workflows", () => {
     // A guard, not a red test: it passes before step 1's code as after it, by
     // design, as CALL-02-AC10's above does. D-139's /apps/mobile/package.json
     // is a named exception beside the folder, not in it.
-    const exceptions = [...D102_FILES, ...D139_APPS_FILES];
+    // RG-03 (BUG-69, test-auditor on #105): reads SAFETY_FILTER_EXCEPTIONS,
+    // the filter test's own list, where it copied D-102's and D-139's alone:
+    // one more file, so stricter or equal.
+    const exceptions = SAFETY_FILTER_EXCEPTIONS;
 
     expect(exceptions.length).toBeGreaterThan(0);
     expect(
@@ -1839,7 +1986,10 @@ describe("this repository's own workflows", () => {
     // A guard, not a red test: it passes before step 1's code as after it, by
     // design, as CALL-02-AC11's above does. D-139's features/grp/session.tsx
     // is a named exception beside the folder in src/, not in it.
-    const exceptions = [...D102_FILES, ...D139_APPS_FILES];
+    // RG-03 (BUG-69, test-auditor on #105): reads SAFETY_FILTER_EXCEPTIONS,
+    // the filter test's own list, where it copied D-102's and D-139's alone:
+    // one more file, so stricter or equal.
+    const exceptions = SAFETY_FILTER_EXCEPTIONS;
 
     expect(exceptions.length).toBeGreaterThan(0);
     expect(
