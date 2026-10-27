@@ -44,9 +44,9 @@
  *     `false` (privacy-security-reviewer's N2 on #106): the action can run
  *     `pnpm install` itself, with scripts on (`actionSetupSteps`);
  *   - no workspace package's package.json (each folder pnpm-workspace.yaml
- *     names; today apps/mobile, apps/server, packages/config,
- *     packages/contracts and packages/test-kit) holds a script named in
- *     `INSTALL_LIFECYCLE`, and none has a binding.gyp;
+ *     names, which must be exactly `FIVE`: apps/mobile, apps/server,
+ *     packages/config, packages/contracts and packages/test-kit) holds a
+ *     script named in `INSTALL_LIFECYCLE`, and none has a binding.gyp;
  *   - the root package.json holds no script named in `INSTALL_LIFECYCLE` but
  *     `prepare`, which is exactly `ROOT_PREPARE`; no `pnpm:devPreinstall`
  *     (`ROOT_INSTALL_HOOKS`); and the root has no binding.gyp.
@@ -66,15 +66,16 @@
  * (below).
  *
  * Not pinned:
- *   - `.github/workflows/ai-review.yml:180`, `pnpm install --frozen-lockfile`
- *     with no `--ignore-scripts`, before the review step that is given the
- *     Claude secrets. A change to ai-review.yml can only be merged by hand
- *     (D-075), so it goes in its own batch pull request, with Dependabot's
- *     #102. Until then the owned package.json files (D-144) and the two
- *     checks above stand in for it;
- *   - `.github/workflows/daily-status.yml:81`, the same install. It runs on a
- *     schedule, from `main`'s already-reviewed code, or when started by hand
- *     (`workflow_dispatch`); no pull request starts it;
+ *   - `.github/workflows/ai-review.yml`'s install step in the `review` job,
+ *     `pnpm install --frozen-lockfile` with no `--ignore-scripts`, before the
+ *     step that is given the Claude secrets (`id: review`). A change to
+ *     ai-review.yml can only be merged by hand (D-075), so it goes in its own
+ *     batch pull request, with Dependabot's #102. Until then the owned
+ *     package.json files (D-144) and the two checks above stand in for it;
+ *   - `.github/workflows/daily-status.yml`'s install step in the `report` job,
+ *     the same install. It runs on a schedule, from `main`'s already-reviewed
+ *     code, or when started by hand (`workflow_dispatch`); no pull request
+ *     starts it;
  *   - any other workflow. deploy-staging.yml and infra-staging.yml run no
  *     `pnpm install` today, and one added there is not read here;
  *   - pnpm commands that install under another name (`update`, `dedupe`,
@@ -550,8 +551,28 @@ describe('BUG-68: every pnpm install in ci.yml runs with --ignore-scripts', () =
       // test-auditor on #106, round 3: the single quote, and an escaped `"`.
       "          echo 'build #1' && pnpm install --frozen-lockfile", // 50: refused
       '          echo "a\\" #" && pnpm install --frozen-lockfile', // 51: refused, the quote is still open
+      // test-auditor on #106, round 4: a backslash escapes nothing in single
+      // quotes, and outside quotes it escapes the quote after it.
+      `          echo 'a\\' "it's #" && pnpm install --frozen-lockfile`, // 52: refused
+      '          echo \\" " #" && pnpm install --frozen-lockfile', // 53: refused
       '',
     ].join('\n');
+
+    // The block from line 48 is the shell text as written here, the escapes
+    // above undone once by JavaScript and not again by YAML.
+    expect(
+      decodedStrings('fixture.yml', fixture)
+        .find((string) => string.line === 48)
+        ?.text.split('\n'),
+    ).toEqual([
+      String.raw`echo "build #1" && pnpm install --frozen-lockfile`,
+      String.raw`echo "#1" # && pnpm install`,
+      String.raw`echo 'build #1' && pnpm install --frozen-lockfile`,
+      String.raw`echo "a\" #" && pnpm install --frozen-lockfile`,
+      String.raw`echo 'a\' "it's #" && pnpm install --frozen-lockfile`,
+      String.raw`echo \" " #" && pnpm install --frozen-lockfile`,
+      '',
+    ]);
 
     const installs = installsIn('fixture.yml', fixture);
 
@@ -581,6 +602,8 @@ describe('BUG-68: every pnpm install in ci.yml runs with --ignore-scripts', () =
       'fixture.yml:48: pnpm install --frozen-lockfile',
       'fixture.yml:50: pnpm install --frozen-lockfile',
       'fixture.yml:51: pnpm install --frozen-lockfile',
+      'fixture.yml:52: pnpm install --frozen-lockfile',
+      'fixture.yml:53: pnpm install --frozen-lockfile',
     ]);
     expect(
       installs.filter((each) => each.ignoresScripts).map((each) => each.line),
@@ -589,9 +612,9 @@ describe('BUG-68: every pnpm install in ci.yml runs with --ignore-scripts', () =
     // The plain-text check (test-auditor on #106): exactly the lines that say
     // pnpm install or pnpm i on one line, outside a comment. Not the shell
     // comment on line 7; not 12, 16 or 17, which name no install right after
-    // pnpm; not 48, 50 or 51, whose quoted `#` its cruder comment rule takes
-    // for one (the reading above finds each); not 49; and each one a line the
-    // decoded reading found.
+    // pnpm; not 48 or 50 to 53, whose quoted `#` its cruder comment rule
+    // takes for one (the reading above finds each); not 49; and each one a
+    // line the decoded reading found.
     const plain = plainInstallLines(fixture);
     expect(plain).toEqual([
       4, 8, 10, 13, 14, 15, 18, 22, 23, 25, 28, 30, 31, 32, 33, 35, 36, 37, 38, 39, 40, 41, 42, 43,
@@ -599,7 +622,7 @@ describe('BUG-68: every pnpm install in ci.yml runs with --ignore-scripts', () =
     ]);
     expect(plain, 'the shell comment on line 7').not.toContain(7);
     expect(
-      plain.filter((number) => [48, 50, 51].includes(number)),
+      plain.filter((number) => [48, 50, 51, 52, 53].includes(number)),
       'the lines with a quoted `#` before the install, which the plain pass drops',
     ).toEqual([]);
     expect(plain.filter((number) => !installs.some((each) => each.line === number))).toEqual([]);
@@ -766,7 +789,11 @@ function rootFindings(root) {
   );
 }
 
-/** The five packages #105 named in pnpm-workspace.yaml, as D-144 owns their package.json files. */
+/**
+ * The five packages #105 named in pnpm-workspace.yaml, as D-144 owns their
+ * package.json files. Exactly these: a package added or removed changes this
+ * list, pnpm-workspace.yaml and the root package.json's workspaces together.
+ */
 const FIVE = [
   'apps/mobile',
   'apps/server',
@@ -811,9 +838,10 @@ function addScript(dir, folder, name, value) {
 
 describe('BUG-68: no package.json holds a script pnpm runs on install, but the root’s prepare', () => {
   test('BUG-68: no workspace package’s package.json holds a script pnpm 10.33.0 runs on install, and none has a binding.gyp', () => {
-    expect(workspaceFolders(ROOT), 'the folders pnpm-workspace.yaml names').toEqual(
-      expect.arrayContaining(FIVE),
-    );
+    expect(
+      workspaceFolders(ROOT),
+      'the folders pnpm-workspace.yaml names: adding or removing a workspace package means updating FIVE here, alongside pnpm-workspace.yaml and the root package.json’s workspaces, each owned (D-144)',
+    ).toEqual(FIVE);
     expect(
       workspaceFindings(ROOT),
       `install-time scripts in the workspace packages: pnpm runs each on every install without --ignore-scripts, before any check of the files they can change (BUG-68). The names refused: ${INSTALL_LIFECYCLE.join(', ')}`,
