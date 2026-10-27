@@ -1,6 +1,6 @@
 # Planning hub — walk-home safety app (working title)
 
-**Last updated:** 2026-10-27 · **Phase:** ✅ Planning complete → ✅ **M0 closed** (2026-09-29, D-083) → ✅ **M1 closed** (2026-10-01, D-088) → ✅ **M2 closed** (2026-10-23, D-142): the core safety loop on the server, all nine tasks done (D-090, D-115), closed on window B of REL-10-AC19, the staging canary on time for 24 hours, with BUG-63 open → 🟡 **M3 started** (2026-10-20, D-134): tasks 1 and 2 of 12 are done: GRP-01 (#96, squashed as `bd83b21` on 2026-10-21) and the home screen (GRP-02, CALL-01, CALL-02; #101, squashed as `05bfb73` on 2026-10-25, its step 1 #100, `50214c0`); task 3, start a journey (JRN-01, JRN-02, LOST-01's phone half), is next in D-134's order and not started; BUG-64, the dependency audit red on `main` after #101 merged, is done (#104, squashed as `35a3290` on 2026-10-26; the owner's answer is D-143, 2026-10-25); BUG-65 to BUG-67 and D-144 are done (#105, squashed as `57e3a3e` on 2026-10-27), BUG-69 is mitigated by D-144 with its check before pnpm queued, and BUG-68 is fixed in the pull request after #105 (`ci.yml`'s ten installs take `--ignore-scripts`; waiting for review and merge); A-03, the Google Play account, is done (the owner, 2026-10-27); [../progress.md](../progress.md) has where the rest stands
+**Last updated:** 2026-10-27 · **Phase:** ✅ Planning complete → ✅ **M0 closed** (2026-09-29, D-083) → ✅ **M1 closed** (2026-10-01, D-088) → ✅ **M2 closed** (2026-10-23, D-142): the core safety loop on the server, all nine tasks done (D-090, D-115), closed on window B of REL-10-AC19, the staging canary on time for 24 hours, with BUG-63 open → 🟡 **M3 started** (2026-10-20, D-134): tasks 1 and 2 of 12 are done: GRP-01 (#96, squashed as `bd83b21` on 2026-10-21) and the home screen (GRP-02, CALL-01, CALL-02; #101, squashed as `05bfb73` on 2026-10-25, its step 1 #100, `50214c0`); task 3, start a journey (JRN-01, JRN-02, LOST-01's phone half), is next in D-134's order and not started; BUG-64, the dependency audit red on `main` after #101 merged, is done (#104, squashed as `35a3290` on 2026-10-26; the owner's answer is D-143, 2026-10-25); BUG-65 to BUG-67 and D-144 are done (#105, squashed as `57e3a3e` on 2026-10-27), BUG-69 is mitigated by D-144 with its check before pnpm queued, and BUG-68's `ci.yml` part is fixed in the pull request after #105, #106 (the ten installs take `--ignore-scripts`; waiting for review and merge), and its `ai-review.yml:180` part is open, to batch with Dependabot #102 (a hand merge, D-075); A-03, the Google Play account, is done (the owner, 2026-10-27); [../progress.md](../progress.md) has where the rest stands
 
 **Current section:** milestone M3, started 2026-10-20 (D-134). **Milestone M2
 is closed** (2026-10-23, D-142). It started 2026-10-01 with SM-01; all nine
@@ -77,14 +77,16 @@ in #105, gives six pnpm files the owner as code owner and names the workspace's 
 packages by folder; the owner's review of those files counts from `57e3a3e` and is a
 person, not a check that runs. Its check before pnpm, a dependency-free Node script
 that runs ahead of the first pnpm command in every job that gates a merge, is queued
-as its own pull request. **BUG-68 is fixed in the pull request after #105, waiting for review
-and merge** (a workspace package's install script ran in CI before the audit and every other
+as its own pull request. **BUG-68's `ci.yml` part is fixed in the pull request after #105
+([#106](https://github.com/bvst/TryggHverdag/pull/106)), waiting for review and merge; its `ai-review.yml:180` part is open**
+(a workspace package's install script ran in CI before the audit and every other
 check): `--ignore-scripts` on the ten installs in `ci.yml`, with `test-author`'s tests
 (`576efa4`) and a change to the CI-03 drill that the flag made necessary (`753553e`; it
 also explains the old jest-expo drill failure in `progress/m2.md`), the fix in `258941a`;
 CI on that branch is the first real check of a flagged install. `ai-review.yml:180`'s install
-goes in a separate batch with Dependabot #102, a hand merge under D-075;
-`daily-status.yml:81` is out of scope, since it runs `main`'s reviewed code on a schedule.
+goes in a separate batch with Dependabot #102, a hand merge under D-075 (that batch must get opened);
+`daily-status.yml:81` is out of scope, since it runs `main`'s reviewed code on a schedule (add the flag the next time
+that file is touched).
 Queued for the owner to schedule: BUG-13 (`gate:full` miscounts the steps that
 did not run after a failure), BUG-16 (`req:coverage` counts an ID named in a
 comment), BUG-19 (no test checks every owner-approval path keeps its owners),
@@ -213,8 +215,8 @@ too: #101, squashed as `05bfb73` on 2026-10-25 (D-141; step 1 was #100,
 `50214c0`). BUG-64, the dependency audit red on `main` after it, is done
 (#104, `35a3290`, 2026-10-26; the owner's answer is D-143), and so are BUG-65 to
 BUG-67 with D-144 (#105, `57e3a3e`, 2026-10-27: six pnpm files need the owner's
-approval). BUG-69 is mitigated by D-144, BUG-68 is fixed in the pull request after #105
-(waiting for review and merge), and A-03, the Google Play account, is done (the owner, 2026-10-27).
+approval). BUG-69 is mitigated by D-144, BUG-68's `ci.yml` part is fixed in the pull request after
+#105 (#106, waiting for review and merge) and its `ai-review.yml:180` part is open, and A-03, the Google Play account, is done (the owner, 2026-10-27).
 Task 3, start a journey, is next in D-134's order:
 [../progress.md](../progress.md).
 
