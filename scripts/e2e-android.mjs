@@ -20,14 +20,13 @@
  * translation keys and ids only, never its text (BUG-70, lib/screen-dump.mjs).
  * A flow the order names that is absent, or there but not tagged `scripted`,
  * stops the run before any flow runs, as does a flow tagged `scripted` that
- * the order does not name. Maestro
- * cannot see a call, so the script reads Telecom's record instead, as
- * SPIKE-01's S6 did (lib/call-records.mjs). The font size is set back to the
- * usual at the end, even after a failed step or flow, and a failure names the
- * flow and the step. No step taps anything, and back is a key, not a tap:
- * the flows never tap in the dialer, and the one call placed is to the test
- * kit's synthetic #1, in Ofcom's range reserved for drama, on an emulator
- * with no network (SPIKE-01-AC10's rule).
+ * the order does not name. Maestro cannot see a call, so the script reads
+ * Telecom's record instead, as SPIKE-01's S6 did (lib/call-records.mjs). The
+ * font size is set back to the usual at the end, even after a failed step or
+ * flow, and a failure names the flow and the step. No step taps anything, and
+ * back is a key, not a tap: the flows never tap in the dialer, and the one
+ * call placed is to the test kit's synthetic #1, in Ofcom's range reserved
+ * for drama, on an emulator with no network (SPIKE-01-AC10's rule).
  *
  * Usage:
  *   pnpm run e2e:android                 the whole run: check, build, install, test
@@ -280,7 +279,7 @@ const testCommand = ({ report, debugOutput, flow }) =>
   });
 
 /** Where `uiautomator dump` writes the screen on the device, to be read with cat and removed (BUG-70). */
-const SCREEN_DUMP_PATH = '/data/local/tmp/trygghverdag-window.xml';
+const SCREEN_DUMP_PATH = '/data/local/tmp/trygghverdag-screen.xml';
 
 /**
  * The screen now, as lib/screen-dump.mjs names it: `{ lines }`, or `{ unread }`
@@ -289,6 +288,8 @@ const SCREEN_DUMP_PATH = '/data/local/tmp/trygghverdag-window.xml';
  * after cat, best effort: a refused rm changes nothing.
  */
 function screenNow() {
+  // `run`, not `step`: step puts adb's output in its error message, and no
+  // screen text may reach a message (PRIV-07).
   const shell = (shellArgs) =>
     run(adb, ['-s', device ?? '', 'shell', ...shellArgs], { timeout: 60_000 });
   const dump = shell(['uiautomator', 'dump', SCREEN_DUMP_PATH]);

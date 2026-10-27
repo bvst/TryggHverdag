@@ -7,9 +7,12 @@
  *
  * PRIV-07: a screen may show a name or a number, so a text or a label is never
  * printed, only the translation keys whose value it is, or its length; and
- * resource-ids and package names, which are code identifiers. Output that is
- * not a hierarchy is refused with an error, never read as an empty screen, and
- * no message repeats its text.
+ * resource-ids and package names, which are code identifiers. Resource-ids are
+ * printed as they are because every testID in the app is a constant of its
+ * code (screen-dump.test.mjs, "BUG-70 and PRIV-07: every resource-id the
+ * reader prints is a constant of the app's code"); other packages' ids are
+ * system ids. Output that is not a hierarchy is refused with an error, never
+ * read as an empty screen, and no message repeats its text.
  */
 
 /** The node lines printed, at most; the rest are counted. */
