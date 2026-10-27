@@ -15,6 +15,10 @@
 # otherwise run their own code in a job that holds this repository's secrets.
 # Dependabot raises the pins (.github/dependabot.yml).
 #
+# Every install here takes --ignore-scripts, so no install-time script runs in
+# CI: a workspace package's or the root's script cannot change the job (its
+# .npmrc, $GITHUB_ENV, the shell later scripts get) before its checks (BUG-68).
+#
 # Every job names its Ubuntu release, ubuntu-26.04, never ubuntu-latest. GitHub
 # moves that label to a new release over weeks, so for a while some runs would
 # get the old release and some the new, and a red that comes and goes would
@@ -54,7 +58,7 @@ jobs:
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with: { node-version-file: .nvmrc, cache: pnpm }
-      - run: pnpm install --frozen-lockfile
+      - run: pnpm install --frozen-lockfile --ignore-scripts
       - run: pnpm run gate:integrity
         env:
           # The branch's rules are readable with ordinary repository access.
@@ -97,7 +101,7 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with: { node-version-file: .nvmrc, cache: pnpm }
       - if: steps.affected.outputs.code == 'true'
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --frozen-lockfile --ignore-scripts
       - if: steps.affected.outputs.code == 'true'
         run: pnpm run gate:static
 
@@ -135,7 +139,7 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with: { node-version-file: .nvmrc, cache: pnpm }
       - if: steps.affected.outputs.code == 'true'
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --frozen-lockfile --ignore-scripts
       # oasdiff, for the CI-06 gate drill that test:unit runs (INF-10). The
       # drill shows api:diff finding a breaking change, so in CI it fails when
       # there is no oasdiff to find one with. Installed as gitleaks is in the
@@ -189,7 +193,7 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with: { node-version-file: .nvmrc, cache: pnpm }
       - if: steps.affected.outputs.code == 'true'
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --frozen-lockfile --ignore-scripts
       # Docker is present on the GitHub runners, which is what makes this the
       # only place these tests can run today: a cloud session has the docker
       # binary but no daemon. Nothing is mocked here on purpose — the upsert,
@@ -234,7 +238,7 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with: { node-version-file: .nvmrc, cache: pnpm }
       - if: steps.affected.outputs.code == 'true'
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --frozen-lockfile --ignore-scripts
       - if: steps.affected.outputs.code == 'true'
         run: pnpm run test:system
 
@@ -272,7 +276,7 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with: { node-version-file: .nvmrc, cache: pnpm }
       - if: steps.affected.outputs.code == 'true'
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --frozen-lockfile --ignore-scripts
       # The same oasdiff install as in unit, from the same pin (D-082): api:diff
       # compares the API with every released version through it.
       - name: Install oasdiff, pinned and checked
@@ -303,7 +307,7 @@ jobs:
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with: { node-version-file: .nvmrc, cache: pnpm }
-      - run: pnpm install --frozen-lockfile
+      - run: pnpm install --frozen-lockfile --ignore-scripts
       - run: pnpm run req:coverage --fail-on-uncovered-changed
       - name: The committed requirement report still matches the tests
         # req:coverage rewrites docs/requirements-status.md. If the committed
@@ -411,7 +415,7 @@ jobs:
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with: { node-version-file: .nvmrc, cache: pnpm }
-      - run: pnpm install --frozen-lockfile
+      - run: pnpm install --frozen-lockfile --ignore-scripts
       # Fresh, never --incremental, which `pnpm run mutation` refuses (D-099).
       # The group's name is the plan's output, computed by the pull request's
       # own code, so it reaches the script through env:, as data.
@@ -578,7 +582,7 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with: { node-version-file: .nvmrc, cache: pnpm }
       - if: steps.affected.outputs.app == 'true'
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --frozen-lockfile --ignore-scripts
       - if: steps.affected.outputs.app == 'true'
         uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
         with: { distribution: temurin, java-version: '17' }
@@ -783,7 +787,7 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with: { node-version-file: .nvmrc, cache: pnpm }
       - if: steps.affected.outputs.code == 'true'
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --frozen-lockfile --ignore-scripts
       - if: steps.affected.outputs.code == 'true'
         run: pnpm audit --audit-level high
       - if: steps.affected.outputs.code == 'true'

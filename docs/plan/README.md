@@ -1,6 +1,6 @@
 # Planning hub — walk-home safety app (working title)
 
-**Last updated:** 2026-10-26 · **Phase:** ✅ Planning complete → ✅ **M0 closed** (2026-09-29, D-083) → ✅ **M1 closed** (2026-10-01, D-088) → ✅ **M2 closed** (2026-10-23, D-142): the core safety loop on the server, all nine tasks done (D-090, D-115), closed on window B of REL-10-AC19, the staging canary on time for 24 hours, with BUG-63 open → 🟡 **M3 started** (2026-10-20, D-134): tasks 1 and 2 of 12 are done: GRP-01 (#96, squashed as `bd83b21` on 2026-10-21) and the home screen (GRP-02, CALL-01, CALL-02; #101, squashed as `05bfb73` on 2026-10-25, its step 1 #100, `50214c0`); task 3, start a journey (JRN-01, JRN-02, LOST-01's phone half), is next in D-134's order and not started; BUG-64, the dependency audit red on `main` after #101 merged, is done (#104, squashed as `35a3290` on 2026-10-26; the owner's answer is D-143, 2026-10-25), and [../progress.md](../progress.md) has where the rest stands
+**Last updated:** 2026-10-27 · **Phase:** ✅ Planning complete → ✅ **M0 closed** (2026-09-29, D-083) → ✅ **M1 closed** (2026-10-01, D-088) → ✅ **M2 closed** (2026-10-23, D-142): the core safety loop on the server, all nine tasks done (D-090, D-115), closed on window B of REL-10-AC19, the staging canary on time for 24 hours, with BUG-63 open → 🟡 **M3 started** (2026-10-20, D-134): tasks 1 and 2 of 12 are done: GRP-01 (#96, squashed as `bd83b21` on 2026-10-21) and the home screen (GRP-02, CALL-01, CALL-02; #101, squashed as `05bfb73` on 2026-10-25, its step 1 #100, `50214c0`); task 3, start a journey (JRN-01, JRN-02, LOST-01's phone half), is next in D-134's order and not started; BUG-64, the dependency audit red on `main` after #101 merged, is done (#104, squashed as `35a3290` on 2026-10-26; the owner's answer is D-143, 2026-10-25); BUG-65 to BUG-67 and D-144 are done (#105, squashed as `57e3a3e` on 2026-10-27), BUG-69 is mitigated by D-144 with its check before pnpm queued, and BUG-68's `ci.yml` part is fixed in the pull request after #105, #106 (the ten installs take `--ignore-scripts`; waiting for review and merge), and its `ai-review.yml:180` part is open, to batch with Dependabot #102 (a hand merge, D-075); A-03, the Google Play account, is done (the owner, 2026-10-27); [../progress.md](../progress.md) has where the rest stands
 
 **Current section:** milestone M3, started 2026-10-20 (D-134). **Milestone M2
 is closed** (2026-10-23, D-142). It started 2026-10-01 with SM-01; all nine
@@ -64,34 +64,37 @@ and BUG-61 (a new `vite` advisory failed the dependency audit; fixed in
 GRP-01's #96, `bd83b21`, 2026-10-21) and BUG-17 (the Android emulator sometimes
 stayed in English past the wait; `e2e:android` now switches it to bokmål itself;
 #99, `3d2255c`, 2026-10-22, D-140) and BUG-64 (a new zod advisory and an undici one
-failed the dependency audit on `main`; #104, `35a3290`, 2026-10-26, D-143).
-**In #105, not merged:** BUG-65, BUG-66 and BUG-67 (the audit-settings check read
-`pnpm-workspace.yaml` and `.npmrc` as text where pnpm decodes them, and a `registry=`
-line or a `registries:` key redirects the audit; each is caught by a test) and BUG-69
-(one line in either file, or a root `.pnpmfile.cjs`, makes `pnpm run` run nothing, so
-every CI check goes green: `privacy-security-reviewer`'s BLOCK on #105, and open on
-`main` already). Tests run through `pnpm run` cannot close BUG-69, so the owner chose
-on 2026-10-26 to put D-144 into #105: six pnpm files get a code owner. Its lines in
-`.github/CODEOWNERS` and `OWNER_APPROVAL_PATHS` are made (`e61b03e`, on #105's branch; `main` has
-them once #105 merges). `privacy-security-reviewer` cleared its BLOCK on `7dda5b8` (all 17 checks
-succeeded, `mutation-group` skipped, all five reviewers passed) and found one more route: turbo runs each
-package's script from that package's folder, so a package's own `.npmrc` can make its typecheck pass having
-run nothing (verified 2026-10-26, open on `main` too); a test now refuses such files (`94cdebc`). A Node
-check before pnpm in CI is queued as its own pull request after #105, as is BUG-68 (a workspace package's
-install script runs in CI before the audit and every other check). A second BLOCK, on `1f7e664`,
-found that the workspace took in `apps/*` and `packages/*`, so a new `apps/<new>/package.json`, which no
-CODEOWNERS line matches, ran its install scripts in every required job; the workspace now names its five
-packages by folder in two owned files (`586416f`, not yet pushed or re-reviewed), and D-144's claim that every
-workspace package's manifest has an owner is corrected: it held only for the packages that existed. BUG-68's fix is
-wider than planned: `--ignore-scripts` on every install before a required check, `ai-review.yml:180` included
-(a hand merge, D-075).
+failed the dependency audit on `main`; #104, `35a3290`, 2026-10-26, D-143) and
+BUG-65, BUG-66 and BUG-67 (the audit-settings check read `pnpm-workspace.yaml` and
+`.npmrc` as text where pnpm decodes them, and a `registry=` line or a `registries:`
+key redirects the audit; each is caught by a test; [#105](https://github.com/bvst/TryggHverdag/pull/105),
+squashed as `57e3a3e` at about 05:59 UTC on 2026-10-27, after `urso-agent` approved
+it, with D-144).
+**BUG-69 is mitigated, not closed:** one line in `pnpm-workspace.yaml` or `.npmrc`, or a
+root `.pnpmfile.cjs`, makes `pnpm run` run nothing, so every CI check goes green
+(`privacy-security-reviewer`'s BLOCK on #105, open on `main` before it). D-144, merged
+in #105, gives six pnpm files the owner as code owner and names the workspace's five
+packages by folder; the owner's review of those files counts from `57e3a3e` and is a
+person, not a check that runs. Its check before pnpm, a dependency-free Node script
+that runs ahead of the first pnpm command in every job that gates a merge, is queued
+as its own pull request. **BUG-68's `ci.yml` part is fixed in the pull request after #105
+([#106](https://github.com/bvst/TryggHverdag/pull/106)), waiting for review and merge; its `ai-review.yml:180` part is open**
+(a workspace package's install script ran in CI before the audit and every other
+check): `--ignore-scripts` on the ten installs in `ci.yml`, with `test-author`'s tests
+(`576efa4`) and a change to the CI-03 drill that the flag made necessary (`753553e`; it
+also explains the old jest-expo drill failure in `progress/m2.md`), the fix in `258941a`;
+CI on `db75070` passed every check, `android-e2e` included, the first full run of a flagged install. `ai-review.yml:180`'s install
+goes in a separate batch with Dependabot #102, a hand merge under D-075 (that batch must get opened);
+`daily-status.yml:81` is out of scope for #106: it runs on a schedule and by hand (`workflow_dispatch`, with the Claude secrets),
+so it is not only `main`'s reviewed code, and it gets the flag the next time that file is touched.
 Queued for the owner to schedule: BUG-13 (`gate:full` miscounts the steps that
 did not run after a failure), BUG-16 (`req:coverage` counts an ID named in a
 comment), BUG-19 (no test checks every owner-approval path keeps its owners),
 BUG-20 (graphile-worker's own logger prints its error object, past `log.ts`),
 BUG-22 (the test-weakening check does not see the shared behaviour suites),
 BUG-25 (an override in `pnpm-workspace.yaml` could hide an advisory; D-144
-gives the file a code owner, in #105), BUG-27 (whether the worker's session limits are in force on a deploy
+gave the file a code owner in #105, `57e3a3e`, and no test yet pins the
+lockfile's `link:` and `file:` resolutions), BUG-27 (whether the worker's session limits are in force on a deploy
 is seen only by chance), BUG-35 (a
 second stop signal ends the process before the pool is closed) and BUG-40
 (`affected.mjs` counts the agent-memory files and `decisions.md` as inert, so
@@ -210,8 +213,11 @@ twelve tasks, one at a time, GRP-01 first. GRP-01 (sign-in and groups) is done:
 apply are done, and the join in the app is left. Task 2, the home screen, is done
 too: #101, squashed as `05bfb73` on 2026-10-25 (D-141; step 1 was #100,
 `50214c0`). BUG-64, the dependency audit red on `main` after it, is done
-(#104, `35a3290`, 2026-10-26; the owner's answer is D-143), and task 3, start a
-journey, is next:
+(#104, `35a3290`, 2026-10-26; the owner's answer is D-143), and so are BUG-65 to
+BUG-67 with D-144 (#105, `57e3a3e`, 2026-10-27: six pnpm files need the owner's
+approval). BUG-69 is mitigated by D-144, BUG-68's `ci.yml` part is fixed in the pull request after
+#105 (#106, waiting for review and merge) and its `ai-review.yml:180` part is open, and A-03, the Google Play account, is done (the owner, 2026-10-27).
+Task 3, start a journey, is next in D-134's order:
 [../progress.md](../progress.md).
 
 **Open for M4** (not an owner action, so not in the to-do table below; it sits
@@ -287,7 +293,7 @@ session.
 |----|--------|-----|--------|
 | A-01 | Ask the group which phones they use (iPhone or Android; brand and model) and who wants to join the private group | Which phone models the automated real-device tests cover; Google's 12-tester rule | ⬜ Open |
 | A-02 | Enrol the AS in the Apple Developer Program: look up the AS's D-U-N-S number (Apple has a lookup tool), and check that the AS has a public website and an email address on its own domain | Test builds on iPhones; Critical Alerts request | ✅ **Done** — the owner, 2026-10-20: the AS is enrolled (D-027) |
-| A-03 | Create a Google Play developer account for the AS (same D-U-N-S number) | Android test track | ⬜ Open (D-027): waiting on Google (the owner asked on 2026-10-20 about an earlier account). The AS needs an **organisation** account; if Google's answer does not give it one, a new one is made with the AS's Workspace user, which costs no extra seat |
+| A-03 | Create a Google Play developer account for the AS (same D-U-N-S number) | Android test track | ✅ **Done** (D-027) — the owner, in session, 2026-10-27: "A-03 er gjort: Google Play-kontoen er reaktivert, den tilhører AS-et med samme D-U-N-S-nummer" (A-03 is done: the Google Play account is reactivated, and it belongs to the AS with the same D-U-N-S number). That answers the wait on Google that began when the owner asked on 2026-10-20 about an earlier account: the earlier account was reactivated, so the fallback, a new account made with the AS's Workspace user, is not needed. The row asked for an **organisation** account; that follows from the account belonging to the AS under its D-U-N-S number. The owner did not state the account's name, type or verification status, so none is recorded, and a session cannot check them. No longer a blocker for M3's task 12 (D-134) |
 | A-04 | Create a Clever Cloud account for the AS | Hosting (D-025) | ✅ Done (2026-09-20) |
 | A-05 | Create a repository on your paid GitHub account and give Claude Code access | Code and CI (D-029); public since 2026-09-28 (D-089) | ✅ Done (2026-09-20) |
 | A-06 | Create a separate GitHub account for Claude (a "machine user"), add it to the repository with write access (not admin), and give Claude Code its token | Your approvals count as real approvals, and the merge rules can't be bypassed (D-042) | ✅ Done (2026-09-20) |

@@ -311,12 +311,15 @@
  *     `pnpm config set registry`: not checked here. Workflows are under the
  *     code-owned .github/;
  *   - a workspace package's `preinstall`, `install`, `postinstall` or
- *     `prepare`: CI's `pnpm install --frozen-lockfile` runs it before the
+ *     `prepare`: an install without `--ignore-scripts` runs it before the
  *     audit, and it can rewrite .npmrc or the job's environment, which checks
- *     of the checked-in files cannot see. Queued as BUG-68: install
- *     with `--ignore-scripts` in the `security` job, and check the workspace
- *     package.json files. Until then the owner's review stands in: with
- *     D-144 (#105), every workspace package.json has a code owner;
+ *     of the checked-in files cannot see. Not read here. BUG-68's
+ *     scripts/install-scripts.test.mjs holds every `pnpm install` in ci.yml
+ *     to `--ignore-scripts`, and the workspace and root package.json files to
+ *     no install script but the root's `prepare`; with D-144 (#105) every
+ *     workspace package.json also has a code owner. ai-review.yml's and
+ *     daily-status.yml's installs are not held to the flag (that file's "Not
+ *     pinned");
  *   - where `yaml` 2.9.1, the parser used here, and pnpm's read YAML
  *     differently beyond the differences found (see `yamlLibrary`). For
  *     pnpm-workspace.yaml the line grammar depends on neither. A workflow is

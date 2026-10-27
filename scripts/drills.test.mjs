@@ -1265,10 +1265,10 @@ function linkModules(from, to) {
 }
 
 /**
- * Runs `command` the way a package.json script runs it, node_modules/.bin
- * first on PATH and the line handed to sh, in a scratch copy of the runner's
- * folder: its configuration files as they are, node_modules linked, and the
- * failing sample where that configuration collects tests.
+ * Runs `command` the way a package.json script runs it, the package's own
+ * node_modules/.bin first on PATH and the line handed to sh, in a scratch copy
+ * of the runner's folder: its configuration files as they are, node_modules
+ * linked, and the failing sample where that configuration collects tests.
  */
 function runRunner(runner, command = runner.command) {
   const dir = scratch(`ci03-${runner.name}`);
@@ -1280,7 +1280,11 @@ function runRunner(runner, command = runner.command) {
   linkModules(path.join(from, 'node_modules'), path.join(dir, 'node_modules'));
   writeFiles(dir, { [runner.sample.file]: runner.sample.text });
   const env = drillEnv({ TMPDIR: scratch('ci03-tmp') });
-  env.PATH = `${path.join(dir, 'node_modules', '.bin')}${path.delimiter}${env.PATH}`;
+  // RG-03 (BUG-68): pnpm puts a package's own node_modules/.bin on PATH. The
+  // scratch folder's symlink to it, on PATH before, broke the shims an install
+  // with --ignore-scripts leaves ("Cannot find module '/node_modules/.pnpm/…'").
+  // No assertion changed.
+  env.PATH = `${path.join(from, 'node_modules', '.bin')}${path.delimiter}${env.PATH}`;
   return spawnGate(['sh', '-c', command], { cwd: dir, env });
 }
 
