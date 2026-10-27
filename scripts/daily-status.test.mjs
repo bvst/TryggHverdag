@@ -3,11 +3,15 @@
 // Test names carry no <ID>-ACn: prefix. INF- is not a tracked requirement, so
 // these prove nothing req:coverage counts (D-074).
 //
-// Nothing can run this workflow before it is on main — GitHub runs scheduled
-// and manual workflows only from the default branch — so its first real test is
-// the first morning. What can be held before then is its shape: the job that
-// reads other people's text cannot write, the job that writes still runs when
-// the first one fails, and the lists that have to agree do.
+// Nothing can run this workflow before it is on main — GitHub starts a workflow
+// by schedule or by hand only once its file is on the default branch — so its
+// first real test is the first morning. After that, scheduled runs use the
+// default branch's latest commit, but a manual run (workflow_dispatch) can
+// target any branch that has the file, and runs that branch's code with the
+// Claude secrets, which is why its install takes --ignore-scripts (BUG-68).
+// What can be held before the first morning is its shape: the job that reads
+// other people's text cannot write, the job that writes still runs when the
+// first one fails, and the lists that have to agree do.
 //
 // Read as text, like the rest of scripts/: the repository keeps no YAML parser,
 // and the shapes asserted on are few and fixed.
