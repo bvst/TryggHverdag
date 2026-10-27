@@ -23,10 +23,12 @@
 //   - a node of the app's own package:
 //       `<app>: id <resource-id, or none>; text: <what>; label: <what>`
 //     where the label is the content-desc, and <what> is `none` when it is
-//     empty; else the key, or keys, whose value it equals in full, a
-//     `{{placeholder}}` standing for any text of one character or more, every
-//     key that matches named, in nb.json's order, joined with ` or `; else
-//     `other text (<n> characters)`. Never the text itself;
+//     empty; else the key, or keys, whose value it equals in full, named in
+//     nb.json's order, joined with ` or `: the keys whose value has no
+//     placeholder and equals it exactly, when there are any (an exact match
+//     wins); else the keys whose value matches it with each `{{placeholder}}`
+//     standing for any text of one character or more; else `other text (<n>
+//     characters)`. Never the text itself;
 //   - a node of another package (a permission dialog, System UI, the
 //     launcher): `<package>: id <resource-id, or none>`, never its text or
 //     label;
@@ -118,9 +120,10 @@ const appScreen = (...content) => hierarchyDump(APP, [appWindowNode([emergencyBa
 /** What every screen of the app starts with: Android's content frame, and the 112 bar. */
 const SCREEN_START = [
   `${APP}: id android:id/content; text: none; label: none`,
-  // "Ring 1 1 2, nødnummeret" is call.emergency.label's value, and
-  // call.button.call's "Ring {{name}}" with "1 1 2, nødnummeret" for the name.
-  `${APP}: id ${EMERGENCY_ID}; text: none; label: call.emergency.label or call.button.call`,
+  // "Ring 1 1 2, nødnummeret" is call.emergency.label's value exactly, so
+  // call.button.call's "Ring {{name}}", which matches it too, is not named:
+  // an exact match wins (round 2 of the red step; RG-03 in the commit).
+  `${APP}: id ${EMERGENCY_ID}; text: none; label: call.emergency.label`,
   `${APP}: id none; text: other text (3 characters); label: none`,
 ];
 
@@ -356,6 +359,45 @@ describe('BUG-70: readScreen names the screen a flow failed on by its translatio
     ]);
   });
 
+  // Round 2 of the red step (the main session's answer, D-031): an exact
+  // match wins. A text that equals a value with no placeholder in it is named
+  // by those keys alone; keys that match only through a placeholder are named
+  // when no key matches exactly, and then all of them, in nb.json's order.
+  test('BUG-70: an exact match wins: a text that equals a value with no placeholder is named by those keys alone, not by the keys a placeholder lets match it; with only placeholder matches, every one is named, in nb.json’s order', async () => {
+    const { readScreen } = await screenDump();
+    const both = filled(nb.grp.members.removed, filled(nb.call.button.call, FIRST.name));
+    const read = (texts, translations) =>
+      readScreen(hierarchyDump(APP, [layoutNode(texts.map((text) => textNode(text)))]), {
+        app: APP,
+        translations,
+      });
+    const SAMPLES = {
+      first: { exact: 'Ring Testa', any: 'Ring {{name}}' },
+      second: { exact: 'Ring Testa', tail: '{{who}} Testa', other: 'Ring {{name}}!' },
+    };
+
+    // Not vacuous: 112's label is call.emergency.label's value, and
+    // call.button.call's too, with "1 1 2, nødnummeret" for the name; and
+    // "Ring Testa er fjernet fra gruppen." is call.button.call's and
+    // grp.members.removed's, through a placeholder each, and no key's exactly.
+    expect(nb.call.emergency.label).toBe('Ring 1 1 2, nødnummeret');
+    expect(nb.call.button.call).toBe('Ring {{name}}');
+    expect(both).toBe('Ring Testa er fjernet fra gruppen.');
+    expect(read([nb.call.emergency.label, both], nb)).toEqual([
+      `${APP}: id none; text: call.emergency.label; label: none`,
+      `${APP}: id none; text: call.button.call or grp.members.removed; label: none`,
+    ]);
+    // "Ring Testa": two exact matches, in two places, beside two placeholder
+    // ones (first.any, second.tail): both exact keys, in order, and neither of
+    // the others. "Ring Ola" and "Ring Ola!": only placeholder matches, so
+    // every one, in order.
+    expect(read(['Ring Testa', 'Ring Ola', 'Ring Ola!'], SAMPLES)).toEqual([
+      `${APP}: id none; text: first.exact or second.exact; label: none`,
+      `${APP}: id none; text: first.any; label: none`,
+      `${APP}: id none; text: first.any or second.other; label: none`,
+    ]);
+  });
+
   test('BUG-70: a node of another package, Android’s permission dialog, is named by its package and its ID only, never its text or label; with no node of the app that has an ID, text or label, that is said first, in one line', async () => {
     const { readScreen } = await screenDump();
     const controller = 'com.android.permissioncontroller';
@@ -493,9 +535,7 @@ describe('BUG-70: readScreen reads the text as XML escapes it', () => {
   test('BUG-70: a character by its number, decimal or hex, is decoded before a label is matched: "Ring 1 1 2, n&#248;dnummeret" is 112’s label', async () => {
     const { readScreen } = await screenDump();
     const read = (raw) => readScreen(withRawLabel(raw), { app: APP, translations: nb });
-    const expected = [
-      `${APP}: id none; text: none; label: call.emergency.label or call.button.call`,
-    ];
+    const expected = [`${APP}: id none; text: none; label: call.emergency.label`];
 
     expect(nb.call.emergency.label).toBe('Ring 1 1 2, nødnummeret');
     expect(read('Ring 1 1 2, n&#248;dnummeret')).toEqual(expected);

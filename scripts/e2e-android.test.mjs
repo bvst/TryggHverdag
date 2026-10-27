@@ -496,8 +496,13 @@ function setUpWorld({ dir, stateDir, flowsDir, world }) {
   writeFileSync(path.join(stateDir, 'wakefulness'), 'Awake\n');
   writeFileSync(path.join(stateDir, 'keyguard'), 'gone\n');
   writeFileSync(path.join(stateDir, 'in_progress'), '');
-  // BUG-70: the launcher's screen, until a flow leaves another.
+  // BUG-70: the launcher's screen, until a flow leaves another; and, with
+  // `world.staleScreen`, a file at SCREEN_DUMP_PATH that an earlier run on
+  // the same emulator left there.
   writeFileSync(path.join(stateDir, 'screen'), LAUNCHER_SCREEN);
+  if (world.staleScreen !== undefined) {
+    writeFileSync(path.join(stateDir, 'screen-file'), world.staleScreen);
+  }
   const [powerHead = '', powerTail = ''] = powerDump(WAKEFULNESS_SLOT).split(WAKEFULNESS_SLOT);
   writeFileSync(path.join(stateDir, 'power-head'), powerHead);
   writeFileSync(path.join(stateDir, 'power-tail'), powerTail);
@@ -583,17 +588,45 @@ function setUpWorld({ dir, stateDir, flowsDir, world }) {
  * leaves the phone as it was) or 'powerRead' (`dumpsys power` prints its dump
  * with no mWakefulness= line).
  *
- * Amended for BUG-70 (additive: today's script calls neither, and no existing
- * test refuses it): `uiautomator dump`, to SCREEN_DUMP_PATH and nowhere else,
- * copies the screen (WORLD_MAESTRO) to the device's file at that path and
- * says so, as the tool does ("UI hierchary dumped to: …", its own spelling);
- * `cat` of that path prints the file, or fails as cat does when there is none.
- * `refuse` may be 'screenDump': uiautomator then prints the error it gives
- * with no window to read, writes nothing, and exits 1 (the exit status is the
- * stand-in's choice: the real tool's, for that error, is not known here).
+ * Amended for BUG-70 (additive: today's script calls none of these, and no
+ * existing test refuses them): `uiautomator dump`, to SCREEN_DUMP_PATH and
+ * nowhere else, writes the screen (WORLD_MAESTRO) to the device's file at that
+ * path (screen-file) and says so, as the tool does ("UI hierchary dumped to:
+ * …", its own spelling), and the stand-in keeps what it wrote (screen-dumped),
+ * for the test; `cat` of that path prints the device's file, or fails as cat
+ * does when there is none; and `rm -f` of that path removes it. `refuse` may
+ * be 'screenDump': uiautomator fails, as it would with another client still
+ * holding the accessibility connection, writes nothing, and exits 1 (the
+ * message and the status are the stand-in's: neither was captured from CI);
+ * 'screenNullRoot': uiautomator answers as AOSP's DumpCommand does with no
+ * window to read, as remembered from AOSP's source and not captured from CI:
+ * "ERROR: null root node returned by UiTestAutomationBridge." on stderr,
+ * nothing written, and exit 0; or 'screenRemove': `rm -f` of that path fails,
+ * and the file stays.
  *
- * @param {{ stateDir: string, refuse?: 'revoke' | 'largeFont' | 'wake' | 'powerRead' | 'screenDump' }} world
+ * @param {{ stateDir: string, refuse?: 'revoke' | 'largeFont' | 'wake' | 'powerRead' | 'screenDump' | 'screenNullRoot' | 'screenRemove' }} world
  */
+/** BUG-70: how the stand-in's `uiautomator` answers, as worldAnswers says. */
+function screenDumpAnswer(refuse, file) {
+  if (refuse === 'screenDump') {
+    return [
+      '        echo "java.lang.IllegalStateException: UiAutomationService already registered (synthetic)" >&2',
+      '        exit 1 ;;',
+    ];
+  }
+  if (refuse === 'screenNullRoot') {
+    return ['        echo "ERROR: null root node returned by UiTestAutomationBridge." >&2 ;;'];
+  }
+  return [
+    `        if [ "$*" != "shell uiautomator dump ${SCREEN_DUMP_PATH}" ]; then`,
+    `          echo "the stand-in emulator dumps the screen only to ${SCREEN_DUMP_PATH}" >&2; exit 2`,
+    '        fi',
+    `        /bin/cp ${file('screen')} ${file('screen-file')}`,
+    `        /bin/cp ${file('screen')} ${file('screen-dumped')}`,
+    `        echo "UI hierchary dumped to: ${SCREEN_DUMP_PATH}" ;;`,
+  ];
+}
+
 function worldAnswers({ stateDir, refuse }) {
   const file = (name) => `"${path.join(stateDir, name)}"`;
   const refusal = (what) => [
@@ -605,25 +638,19 @@ function worldAnswers({ stateDir, refuse }) {
   const broken = (service) =>
     `        if [ -s ${file('dumps_broken')} ]; then echo "Can't find service: ${service}" >&2; exit 1; fi`;
   return [
-    // BUG-70: the screen, dumped by uiautomator to the device, and printed by cat.
+    // BUG-70: the screen, dumped by uiautomator to a file on the device,
+    // printed by cat, and removed by rm.
     '      *uiautomator*)',
-    ...(refuse === 'screenDump'
-      ? [
-          '        echo "ERROR: null root node returned by UiTestAutomationBridge." >&2',
-          '        exit 1 ;;',
-        ]
-      : [
-          `        if [ "$*" != "shell uiautomator dump ${SCREEN_DUMP_PATH}" ]; then`,
-          `          echo "the stand-in emulator dumps the screen only to ${SCREEN_DUMP_PATH}" >&2; exit 2`,
-          '        fi',
-          `        /bin/cp ${file('screen')} ${file('screen-dumped')}`,
-          `        echo "UI hierchary dumped to: ${SCREEN_DUMP_PATH}" ;;`,
-        ]),
+    ...screenDumpAnswer(refuse, file),
     `      "shell cat ${SCREEN_DUMP_PATH}")`,
-    `        if [ ! -f ${file('screen-dumped')} ]; then`,
+    `        if [ ! -f ${file('screen-file')} ]; then`,
     `          echo "cat: ${SCREEN_DUMP_PATH}: No such file or directory" >&2; exit 1`,
     '        fi',
-    `        /bin/cat ${file('screen-dumped')} ;;`,
+    `        /bin/cat ${file('screen-file')} ;;`,
+    `      "shell rm -f ${SCREEN_DUMP_PATH}")`,
+    ...(refuse === 'screenRemove'
+      ? [`        echo "rm: ${SCREEN_DUMP_PATH}: Read-only file system" >&2`, '        exit 1 ;;']
+      : [`        /bin/rm -f ${file('screen-file')} ;;`]),
     `      *dumpsys*telecom*) /bin/cat ${file('telecom')} ;;`,
     '      *dumpsys*window*)',
     broken('window'),
@@ -1306,8 +1333,10 @@ function expectWaitedOut(wait, { deadline, interval }, output) {
  *
  *   Amended for BUG-70 (additive): `firstRunScreen` is the screen that first
  *   run leaves, as uiautomator dumps it ({APP} for the application ID); unset,
- *   the launcher's stays, as before. And the result holds `screenDumped`, the
- *   file uiautomator wrote on the device, empty when nothing dumped the screen.
+ *   the launcher's stays, as before. And the result holds `screenDumped`, what
+ *   uiautomator last wrote on the device, empty when nothing dumped the screen,
+ *   and `screenFileAtEnd`, the file at that path on the device at the end, or
+ *   null when there is none (round 2: the script removes it after reading it).
  */
 async function runPastPreflight({
   args = ['--skip-build'],
@@ -1535,9 +1564,13 @@ async function runPastPreflight({
       // keeps out of the job log were there to leak.
       telecomAtEnd: lines(path.join(stateDir, 'telecom')).join('\n'),
       windowAtEnd: lines(path.join(stateDir, 'window')).join('\n'),
-      // Added for BUG-70: the file uiautomator wrote on the device, so a test
-      // can show that what it keeps out of the job log was there to leak.
+      // Added for BUG-70: what uiautomator last wrote on the device, so a test
+      // can show that what it keeps out of the job log was there to leak; and
+      // the device's file at that path at the end, null when there is none.
       screenDumped: lines(path.join(stateDir, 'screen-dumped')).join('\n'),
+      screenFileAtEnd: existsSync(path.join(stateDir, 'screen-file'))
+        ? readFileSync(path.join(stateDir, 'screen-file'), 'utf8')
+        : null,
     };
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -2663,13 +2696,14 @@ const endsTheCall = (call) =>
  * A run with every flow copied and the stand-in emulator's world, as it should
  * be unless `effects` or `refuse` say otherwise. Amended for CALL-01, approach
  * 9 (PRIV-07): `unmasked` has Telecom's record and the window dumps hold
- * numbers in full (setUpWorld).
+ * numbers in full (setUpWorld). Amended for BUG-70 (additive): `staleScreen`
+ * is a file an earlier run left at the path the script dumps the screen to.
  */
-const runScripted = ({ effects = {}, refuse, extraFlows, unmasked } = {}) =>
+const runScripted = ({ effects = {}, refuse, extraFlows, unmasked, staleScreen } = {}) =>
   runPastPreflight({
     copyFlows: 'all',
     extraFlows,
-    world: { effects: { ...AS_IT_SHOULD_BE, ...effects }, refuse, unmasked },
+    world: { effects: { ...AS_IT_SHOULD_BE, ...effects }, refuse, unmasked, staleScreen },
   });
 
 /**
@@ -3487,6 +3521,18 @@ describe('CALL-01, approach 9 (PR #101’s first android-e2e): an awake, unlocke
 // readScreen refuses, is one line saying the screen is unread and why, never
 // the dump's text, and the run still fails with Maestro's reason. A passing
 // run never dumps the screen.
+//
+// Round 2 of the red step (the main session's answers, D-031): an exact
+// match wins, so 112's label is call.emergency.label alone (the reader's tests
+// pin the rule); and a stale dump must never name a screen. A file an earlier
+// run left at that path would be printed as this run's screen if a dump that
+// wrote nothing were followed by cat, so only a dump whose output holds
+// uiautomator's own "dumped to: <path>" line is read, even one that exits 0;
+// otherwise the unread line names the dump step and says it did not say it
+// wrote the file, and nothing is cat. And the file is removed right after it
+// is read, best effort, with `adb -s <serial> shell rm -f` of that path, also
+// when readScreen refuses what cat printed; a refused rm changes nothing in
+// the run's outcome.
 
 /** The app's Android application ID, which the script reads from app.config.ts and hands Maestro. */
 const APP_ID = 'no.trygghverdag.placeholder';
@@ -3525,10 +3571,15 @@ const appWindowWith = (...content) =>
     ...content,
   ]);
 
-/** The lines readScreen gives for what every screen of the app starts with: Android's content frame, and the 112 bar. */
+/**
+ * The lines readScreen gives for what every screen of the app starts with:
+ * Android's content frame, and the 112 bar. Round 2 (RG-03 in the commit):
+ * 112's label was `call.emergency.label or call.button.call`, set before the
+ * rule that an exact match wins.
+ */
 const SCREEN_START_LINES = [
   `${APP_ID}: id android:id/content; text: none; label: none`,
-  `${APP_ID}: id ${EMERGENCY_BUTTON_ID}; text: none; label: call.emergency.label or call.button.call`,
+  `${APP_ID}: id ${EMERGENCY_BUTTON_ID}; text: none; label: call.emergency.label`,
   `${APP_ID}: id none; text: other text (3 characters); label: none`,
 ];
 
@@ -3618,10 +3669,37 @@ function missingInOrder(lines, expected, from) {
   });
 }
 
-/** The two adb steps that read the screen, as the stand-in adb logs them. */
+/**
+ * The adb steps that read the screen and then remove the file, as the
+ * stand-in adb logs them. Round 2: the rm was added.
+ */
 const SCREEN_READ = [
   `adb -s emulator-5554 shell uiautomator dump ${SCREEN_DUMP_PATH}`,
   `adb -s emulator-5554 shell cat ${SCREEN_DUMP_PATH}`,
+  `adb -s emulator-5554 shell rm -f ${SCREEN_DUMP_PATH}`,
+];
+
+/** A call to adb that prints, or removes, the file the screen is dumped to. */
+const catsScreenFile = (call) => call.endsWith(`shell cat ${SCREEN_DUMP_PATH}`);
+const removesScreenFile = (call) => call.endsWith(`shell rm -f ${SCREEN_DUMP_PATH}`);
+
+/** The lines of `output` that say the screen is unread. */
+const screenUnread = (output) =>
+  output.split('\n').filter((line) => /\bscreen\b/i.test(line) && UNREAD.test(line));
+
+/** The run's failure as stop() writes it: from the line naming the flow and Maestro's reason to the end. */
+function failureTail(stderr) {
+  const at = stderr.search(/^.*\bthe flow failed in Maestro\b/m);
+  return at === -1 ? '' : stderr.slice(at);
+}
+
+/**
+ * Where the file the screen was read from ends up, by what cat printed. Kept
+ * out of the test.each call, as REPORT_PROBLEMS is.
+ */
+const SCREEN_FILE_REMOVALS = [
+  { what: 'readScreen reads what cat printed', screen: WAITING_SCREEN },
+  { what: 'readScreen refuses what cat printed', screen: `Uleselig skjerm ${MOBILE}` },
 ];
 
 /**
@@ -3692,14 +3770,15 @@ describe('BUG-70: when a Maestro run fails, the job log names the screen it fail
   });
 
   test.each(FAILED_MAESTRO_RUNS)(
-    'BUG-70: when $what fails in Maestro, the screen is read right after: the next two adb steps are uiautomator dump to /data/local/tmp/trygghverdag-window.xml and cat of it, before any wake, key, font size, dumpsys or logcat, and only once',
+    'BUG-70: when $what fails in Maestro, the screen is read right after: the next three adb steps are uiautomator dump to /data/local/tmp/trygghverdag-window.xml, cat of it and rm -f of it, before any wake, key, font size, dumpsys or logcat, and only once',
     async ({ run }) => {
       const { output, calls } = await run();
       const failed = calls.findLastIndex(isFlowRun);
       const next = calls.slice(failed + 1).filter((call) => call.startsWith('adb'));
 
       expect(failed, output).toBeGreaterThan(-1);
-      expect(next.slice(0, 2), output).toEqual(SCREEN_READ);
+      // Round 2: was the first two, the dump and the cat; the rm is added.
+      expect(next.slice(0, 3), output).toEqual(SCREEN_READ);
       expect(calls.filter(isScreenDump), output).toHaveLength(1);
     },
   );
@@ -3777,6 +3856,73 @@ describe('BUG-70: when a Maestro run fails, the job log names the screen it fail
     expect(output).toContain('com.android.systemui: id android:id/text');
     expect(numberLeaks(output), output).toEqual([]);
     expect(code, output).toBe(1);
+  });
+
+  // Round 2 (the main session's answer): a stale dump must never name a
+  // screen. uiautomator's null-root answer is remembered from AOSP's
+  // DumpCommand, not captured from CI (worldAnswers).
+  test('BUG-70: when uiautomator exits 0 but does not say it wrote the file, as AOSP’s does with no window to read, the file an earlier run left there is never read: no cat, no screen line, and one line saying the screen is unread, naming the dump step and saying it did not say it wrote the file; the run still fails with Maestro’s reason', async () => {
+    const stale = JOIN_SCREEN.replaceAll('{APP}', APP_ID);
+    const { code, stderr, output, calls, screenDumped, screenFileAtEnd } = await runScripted({
+      effects: FIRST_CONTACT_FAILS_ON(WAITING_SCREEN),
+      refuse: 'screenNullRoot',
+      staleScreen: stale,
+    });
+    const unread = screenUnread(output);
+
+    // Not vacuous: it tried; uiautomator wrote nothing; and the file left
+    // there held a screen of the app to name, still there to be read.
+    expect(calls.filter(isScreenDump), output).toHaveLength(1);
+    expect(screenDumped, output).toBe('');
+    expect(stale).toContain(NB.grp.join.title);
+    expect(screenFileAtEnd, output).toBe(stale);
+    expect(calls.filter(catsScreenFile), output).toEqual([]);
+    expect(output).not.toContain(`${APP_ID}: id `);
+    expect(output).not.toMatch(/\bgrp\.(?:join|waiting)\b/);
+    expect(unread, output).toHaveLength(1);
+    expect(unread[0], output).toMatch(/\buiautomator dump\b/);
+    expect(unread[0], output).toMatch(/\bdid(?: not|n['’]t) say\b[^\n]*\bwr(?:ote|itten)\b/i);
+    expect(code, output).toBe(1);
+    expect(stderr, output).toContain('first-contact');
+    expect(stderr, output).toMatch(/\bMaestro exited with code 1\b/);
+  });
+
+  test.each(SCREEN_FILE_REMOVALS)(
+    'BUG-70: when $what, the file is removed from the device right after the cat, with rm -f, once, and is gone at the end',
+    async ({ screen }) => {
+      const { output, calls, screenDumped, screenFileAtEnd } = await runScripted({
+        effects: FIRST_CONTACT_FAILS_ON(screen),
+      });
+      const adb = calls.filter((call) => call.startsWith('adb'));
+      const cat = adb.findIndex(catsScreenFile);
+
+      // Not vacuous: the dump wrote the file, and cat printed it.
+      expect(screenDumped, output).toBe(screen.replaceAll('{APP}', APP_ID));
+      expect(cat, output).toBeGreaterThan(-1);
+      expect(adb[cat + 1], output).toBe(`adb -s emulator-5554 shell rm -f ${SCREEN_DUMP_PATH}`);
+      expect(calls.filter(removesScreenFile), output).toHaveLength(1);
+      expect(screenFileAtEnd, output).toBeNull();
+    },
+  );
+
+  test('BUG-70: when the rm is refused, nothing in the run’s outcome changes: the screen’s lines are still printed, and the run fails with the same exit code and the same failure, word for word, as when the rm works, the font size reset', async () => {
+    const removed = await runScripted({ effects: FIRST_CONTACT_FAILS_ON(WAITING_SCREEN) });
+    const refused = await runScripted({
+      effects: FIRST_CONTACT_FAILS_ON(WAITING_SCREEN),
+      refuse: 'screenRemove',
+    });
+    const lines = refused.output.split('\n');
+    const heading = screenHeading(lines, /\bfirst-contact\b/);
+
+    // Not vacuous: the rm was tried and refused, and the file stayed.
+    expect(refused.calls.filter(removesScreenFile), refused.output).toHaveLength(1);
+    expect(refused.screenFileAtEnd, refused.output).not.toBeNull();
+    expect(heading, refused.output).toBeGreaterThan(-1);
+    expect(missingInOrder(lines, WAITING_LINES, heading), refused.output).toEqual([]);
+    expect(failureTail(refused.stderr), refused.output).not.toBe('');
+    expect(failureTail(refused.stderr), refused.output).toBe(failureTail(removed.stderr));
+    expect([refused.code, removed.code], refused.output).toEqual([1, 1]);
+    expect(Number(refused.fontScaleAtEnd), refused.output).toBe(1);
   });
 });
 
