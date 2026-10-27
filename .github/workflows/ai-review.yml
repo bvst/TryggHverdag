@@ -177,8 +177,7 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with: { node-version-file: .nvmrc, cache: pnpm }
       - if: steps.applies.outputs.run == 'true'
-        # --ignore-scripts, so no install-time script runs just before the next
-        # step, the one given the Claude secrets (BUG-68).
+        # No install script runs in a job given the Claude secrets (BUG-68).
         run: pnpm install --frozen-lockfile --ignore-scripts
 
       - if: steps.applies.outputs.run == 'true'
@@ -215,8 +214,8 @@ jobs:
           # account default, which the job log showed as claude-sonnet-5; the
           # reviewers that inherit then ran on Sonnet 5. An alias would be
           # resolved by whichever Claude Code this pinned action installs
-          # (2.1.304 at v1.0.254), so it could change with any bump of the
-          # action; a full ID cannot.
+          # (2.1.304 at v1.0.254 when D-118 was written; 2.1.310 at v1.0.262),
+          # so it could change with any bump of the action; a full ID cannot.
           claude_args: >-
             --model claude-opus-5-5
             --allowedTools
