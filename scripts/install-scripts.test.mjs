@@ -23,16 +23,18 @@
  *   - every `pnpm install` (or `pnpm i`, `pnpm add`, `pnpm install-test`,
  *     `pnpm it`) in ci.yml carries `--ignore-scripts` on that same command,
  *     spelled that way, with no `false` after it and no other spelling of the
- *     setting beside it. ci.yml is read as GitHub decodes it, every string in
- *     it and not only `run:` (android-emulator-runner's `with: script:` is a
- *     shell command too), and each string as the shell splits it: lines joined
- *     at a trailing backslash, comments dropped, commands split at `;`, `&`,
- *     `|`, `&&`, `||`, parentheses and backticks, and a `${{ … }}` expression
- *     read as one word, which GitHub fills in before the shell runs. A line of
- *     ci.yml that says
- *     `pnpm install` or `pnpm i` in plain text, outside a comment, must be one
- *     the decoded reading found, so a part of the file the reading misses
- *     cannot hide one;
+ *     setting beside it. pnpm is pnpm however it is called: a path to it,
+ *     `pnpm@<version>`, its `pnpm.cjs`, and behind `npx`, `corepack`,
+ *     `pnpm dlx` or `node` (`PNPM_WORD`). ci.yml is read as GitHub decodes
+ *     it, every string in it and not only `run:` (android-emulator-runner's
+ *     `with: script:` is a shell command too), and each string as the shell
+ *     splits it: lines joined at a trailing backslash, comments dropped,
+ *     commands split at `;`, `&`, `|`, `&&`, `||`, parentheses and backticks,
+ *     and a `${{ … }}` expression read as one word, which GitHub fills in
+ *     before the shell runs. A plain reading of ci.yml's lines, with no YAML
+ *     parser, must find as many lines that say `pnpm install` or `pnpm i`
+ *     outside a comment as the decoded reading finds installs, each one of
+ *     them, so a part of the file the decoded reading misses cannot hide one;
  *   - no workspace package's package.json (each folder pnpm-workspace.yaml
  *     names; today apps/mobile, apps/server, packages/config,
  *     packages/contracts and packages/test-kit) holds a script named in
@@ -69,10 +71,12 @@
  *     `pnpm install` today, and one added there is not read here;
  *   - pnpm commands that install under another name (`update`, `dedupe`,
  *     `remove`, `link`, `import`), `pnpm rebuild` (which runs install scripts
- *     on purpose), and installs by npm, yarn or corepack;
- *   - an install the shell builds while it runs (`$PNPM install`, `eval`), or
- *     one a repository script or an action runs for the step: only the text
- *     of ci.yml is read;
+ *     on purpose), and installs by npm or yarn, corepack's included (corepack
+ *     running pnpm is read, above);
+ *   - an install the shell builds while it runs (`$PNPM install`,
+ *     `$(command -v pnpm) install`, `eval`), pnpm under another file name, or
+ *     an install a repository script or an action runs for the step: only the
+ *     text of ci.yml is read;
  *   - `npm_config_ignore_scripts` or an .npmrc `ignore-scripts` line: neither
  *     is read. pnpm gives the command-line option precedence: in the minimal
  *     workspace on 2026-10-27, with either set to `false`,
@@ -109,10 +113,9 @@ const WORKFLOWS = path.join(ROOT, '.github', 'workflows');
 
 /**
  * The scripts pnpm 10.33.0 runs from a workspace project's package.json while
- * it installs, read in its own bundle on 2026-10-27:
- * `/root/.local/share/pnpm/.tools/pnpm/10.33.0_tmp_571/node_modules/pnpm/dist/pnpm.cjs`,
- * the pnpm the root package.json's `packageManager` names (pnpm 10.28.0 under
- * /opt/node-tools is a different one).
+ * it installs, read on 2026-10-27 in its own bundle, `dist/pnpm.cjs` of the
+ * pnpm 10.33.0 the root package.json's `packageManager` names (not another
+ * version's):
  *   - `pkg-manager/headless`, the install `--frozen-lockfile` takes when the
  *     lockfile is up to date, and `pkg-manager/core`'s install each call
  *     `runLifecycleHooksConcurrently(["preinstall", "install", "postinstall",
@@ -300,15 +303,25 @@ function ignoresScripts(words) {
 }
 
 /**
- * Every pnpm install in a workflow: a command with the word `pnpm` (or a path
- * ending in `/pnpm`) followed, flags or not in between, by one of
- * `INSTALL_COMMANDS` as a word of its own. Each with where it is, the command
- * from `pnpm` on, and whether it ignores scripts.
+ * A word that calls pnpm: `pnpm`, a path ending in it, pnpm with a version
+ * (`pnpm@10.33.0`, as `npx` and `corepack` take one), or pnpm's own script run
+ * by node (`…/pnpm/bin/pnpm.cjs`). What runs it (`npx`, `corepack`,
+ * `pnpm dlx`, `node`) comes before it in the same command, so a command is
+ * read from its first such word on (privacy-security-reviewer's N1 on #106:
+ * `npx pnpm@10.33.0 install` got past `word === 'pnpm'`).
+ */
+const PNPM_WORD = /^(?:.*\/)?pnpm(?:@\S+|\.[cm]?js)?$/;
+
+/**
+ * Every pnpm install in a workflow: a command with a `PNPM_WORD` followed,
+ * flags or not in between, by one of `INSTALL_COMMANDS` as a word of its own.
+ * Each with where it is, the command from that word on, and whether it
+ * ignores scripts.
  */
 function installsIn(file, text) {
   return decodedStrings(file, text).flatMap(({ text: value, line }) =>
     shellCommands(value).flatMap(({ words, offset }) => {
-      const at = words.findIndex((word) => word === 'pnpm' || word.endsWith('/pnpm'));
+      const at = words.findIndex((word) => PNPM_WORD.test(word));
       if (at === -1) return [];
       const own = words.slice(at);
       if (!own.slice(1).some((word) => INSTALL_COMMANDS.has(word))) return [];
@@ -330,14 +343,16 @@ const withScripts = (installs) =>
 
 /**
  * The lines of a workflow, outside a comment, that say `pnpm install` or
- * `pnpm i` in plain text: read with no YAML parser, as a check on the one
- * above.
+ * `pnpm i` in plain text (pnpm with a version, or its script, too): read with
+ * no YAML parser, as a check on the one above.
  */
 function plainInstallLines(text) {
   return text
     .split('\n')
     .map((line, index) => ({ code: line.replace(/(^|\s)#.*$/, ''), number: index + 1 }))
-    .filter(({ code }) => /(?:^|[\s/"'(`])pnpm\s+(?:install|i)(?=\s|$|["')`])/.test(code))
+    .filter(({ code }) =>
+      /(?:^|[\s/"'(`])pnpm(?:@\S+|\.[cm]?js)?\s+(?:install|i)(?=\s|$|["')`])/.test(code),
+    )
     .map(({ number }) => number);
 }
 
@@ -347,6 +362,14 @@ describe('BUG-68: every pnpm install in ci.yml runs with --ignore-scripts', () =
     const installs = installsIn('ci.yml', text);
 
     expect(installs.length, 'pnpm installs the decoded reading finds in ci.yml').toBeGreaterThan(0);
+    // Two readings, one count: every install in ci.yml is written on one
+    // line, so the plain-text pass and the decoded one find as many (ten,
+    // today), and a reading that finds nothing cannot agree with one that
+    // finds them all.
+    expect(
+      plainInstallLines(text),
+      'lines of ci.yml that say pnpm install or pnpm i, outside a comment, against the installs the decoded reading found',
+    ).toHaveLength(installs.length);
     expect(
       plainInstallLines(text).filter((number) => !installs.some((each) => each.line === number)),
       'lines of ci.yml that say pnpm install or pnpm i, outside a comment, which the decoded reading did not find as an install',
@@ -365,7 +388,7 @@ describe('BUG-68: every pnpm install in ci.yml runs with --ignore-scripts', () =
       '      - run: pnpm install --frozen-lockfile --ignore-scripts', // 4: passes
       '      - run: |', // 5
       '          set -euo pipefail', // 6
-      '          # pnpm install, in a shell comment', // 7: not a command
+      '          # pnpm install in a shell comment', // 7: not a command
       '          pnpm i --frozen-lockfile', // 8: refused
       '      - run: >-', // 9
       '          pnpm install', // 10: refused, folded with the next line
@@ -392,6 +415,19 @@ describe('BUG-68: every pnpm install in ci.yml runs with --ignore-scripts', () =
       '      - run: version=$(pnpm install --frozen-lockfile)', // 31: refused, in a command substitution
       "      - run: '{ pnpm install --ignore-scripts; }'", // 32: passes, in a group
       '      - run: echo `pnpm i`', // 33: refused, in backticks
+      // test-auditor on #106: row 30's ` # …` is a YAML comment, gone before
+      // the shell reading sees it. In a block it is the shell's to drop.
+      '      - run: |', // 34
+      '          pnpm install --frozen-lockfile # --ignore-scripts', // 35: refused, the flag is a shell comment
+      // privacy-security-reviewer's N1 on #106: pnpm called by another name.
+      '      - run: npx pnpm@10.33.0 install --frozen-lockfile', // 36: refused
+      '      - run: npx pnpm@10.33.0 install --frozen-lockfile --ignore-scripts', // 37: passes
+      '      - run: npx pnpm install', // 38: refused
+      '      - run: corepack pnpm install --frozen-lockfile', // 39: refused
+      '      - run: pnpm dlx pnpm install', // 40: refused
+      '      - run: /usr/local/bin/pnpm install', // 41: refused, a path to pnpm
+      '      - run: node node_modules/pnpm/bin/pnpm.cjs install', // 42: refused, pnpm's script
+      '      - run: pnpm install --frozen-lockfile \\', // 43: refused, a backslash ends the string
       '',
     ].join('\n');
 
@@ -410,15 +446,29 @@ describe('BUG-68: every pnpm install in ci.yml runs with --ignore-scripts', () =
       'fixture.yml:30: pnpm install --frozen-lockfile',
       'fixture.yml:31: pnpm install --frozen-lockfile',
       'fixture.yml:33: pnpm i',
+      'fixture.yml:35: pnpm install --frozen-lockfile',
+      'fixture.yml:36: pnpm@10.33.0 install --frozen-lockfile',
+      'fixture.yml:38: pnpm install',
+      'fixture.yml:39: pnpm install --frozen-lockfile',
+      'fixture.yml:40: pnpm dlx pnpm install',
+      'fixture.yml:41: /usr/local/bin/pnpm install',
+      'fixture.yml:42: node_modules/pnpm/bin/pnpm.cjs install',
+      'fixture.yml:43: pnpm install --frozen-lockfile',
     ]);
     expect(
       installs.filter((each) => each.ignoresScripts).map((each) => each.line),
       'the installs that pass',
-    ).toEqual([4, 12, 16, 23, 25, 32]);
-    // The plain-text check sees every one of these that is on one line.
-    expect(
-      plainInstallLines(fixture).filter((number) => !installs.some((each) => each.line === number)),
-    ).toEqual([]);
+    ).toEqual([4, 12, 16, 23, 25, 32, 37]);
+    // The plain-text check (test-auditor on #106): exactly the lines that say
+    // pnpm install or pnpm i on one line, outside a comment. Not the shell
+    // comment on line 7; not 12, 16 or 17, which name no install right after
+    // pnpm; and each one a line the decoded reading found.
+    const plain = plainInstallLines(fixture);
+    expect(plain).toEqual([
+      4, 8, 10, 13, 14, 15, 18, 22, 23, 25, 28, 30, 31, 32, 33, 35, 36, 37, 38, 39, 40, 41, 42, 43,
+    ]);
+    expect(plain, 'the shell comment on line 7').not.toContain(7);
+    expect(plain.filter((number) => !installs.some((each) => each.line === number))).toEqual([]);
     expect(() => installsIn('broken.yml', 'jobs:\n  a: [\n')).toThrow(
       /broken\.yml is not read as clean/,
     );
@@ -586,14 +636,23 @@ describe('BUG-68: no package.json holds a script pnpm runs on install, but the r
       ]),
     );
 
-    // What it cannot read fails, rather than reading as clean: a glob, and a
-    // package with no package.json.
+    // What it cannot read fails, rather than reading as clean: a glob, a
+    // package with no package.json, and a `scripts` that is not an object of
+    // scripts (test-auditor on #106).
     const globbed = copyOfManifests();
     writeFileSync(path.join(globbed, 'pnpm-workspace.yaml'), 'packages:\n  - apps/*\n');
     expect(() => workspaceFindings(globbed)).toThrow(/"apps\/\*", which is not a plain folder/);
     const missing = copyOfManifests();
     rmSync(path.join(missing, 'apps/server/package.json'));
     expect(() => workspaceFindings(missing)).toThrow(/apps\/server\/package\.json is missing/);
+    for (const scripts of ['postinstall', ['postinstall']]) {
+      const odd = copyOfManifests();
+      const file = path.join(odd, 'apps/server/package.json');
+      writeFileSync(file, JSON.stringify({ ...JSON.parse(readFileSync(file, 'utf8')), scripts }));
+      expect(workspaceFindings(odd), `scripts as ${JSON.stringify(scripts)}`).toEqual([
+        `apps/server/package.json: scripts is ${JSON.stringify(scripts)}, not an object of scripts`,
+      ]);
+    }
   });
 
   test('BUG-68: the root package.json’s only install-time script is prepare, which sets the local git hooks and nothing else, and the root has no binding.gyp', () => {
