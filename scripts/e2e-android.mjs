@@ -282,6 +282,14 @@ const testCommand = ({ report, debugOutput, flow }) =>
 const SCREEN_DUMP_PATH = '/data/local/tmp/trygghverdag-screen.xml';
 
 /**
+ * The limits, in milliseconds, on the dump and on each of cat and rm: short,
+ * so a hung adb cannot hold a failed run for minutes before it stops. The dump
+ * takes a few seconds; cat and rm of one file, far less.
+ */
+const SCREEN_DUMP_TIMEOUT_MS = 20_000;
+const SCREEN_FILE_TIMEOUT_MS = 10_000;
+
+/**
  * The screen now, as lib/screen-dump.mjs names it: `{ lines }`, or `{ unread }`
  * saying why not. Only a dump that says it wrote the file is read, so a file
  * an earlier run left there never names this screen; the file is removed right
@@ -290,15 +298,15 @@ const SCREEN_DUMP_PATH = '/data/local/tmp/trygghverdag-screen.xml';
 function screenNow() {
   // `run`, not `step`: step puts adb's output in its error message, and no
   // screen text may reach a message (PRIV-07).
-  const shell = (shellArgs) =>
-    run(adb, ['-s', device ?? '', 'shell', ...shellArgs], { timeout: 60_000 });
-  const dump = shell(['uiautomator', 'dump', SCREEN_DUMP_PATH]);
+  const shell = (shellArgs, timeout) =>
+    run(adb, ['-s', device ?? '', 'shell', ...shellArgs], { timeout });
+  const dump = shell(['uiautomator', 'dump', SCREEN_DUMP_PATH], SCREEN_DUMP_TIMEOUT_MS);
   if (!dump.ok) return { unread: `uiautomator dump failed (exit code ${String(dump.status)})` };
   if (!dump.output.includes(`dumped to: ${SCREEN_DUMP_PATH}`)) {
     return { unread: `uiautomator dump did not say it wrote ${SCREEN_DUMP_PATH}` };
   }
-  const cat = shell(['cat', SCREEN_DUMP_PATH]);
-  shell(['rm', '-f', SCREEN_DUMP_PATH]);
+  const cat = shell(['cat', SCREEN_DUMP_PATH], SCREEN_FILE_TIMEOUT_MS);
+  shell(['rm', '-f', SCREEN_DUMP_PATH], SCREEN_FILE_TIMEOUT_MS);
   if (!cat.ok) return { unread: `cat of the dump failed (exit code ${String(cat.status)})` };
   try {
     return { lines: readScreen(cat.output, { app: appId, translations }) };
@@ -353,10 +361,14 @@ function runFlows(title, { report, debugOutput, flow }) {
     process.stdout.write(`\ne2e:android: ${verdict.message}\n`);
     return null;
   }
-  printScreen(flow ?? 'the first run');
   let exit = `Maestro exited with code ${String(maestroRun.status)}`;
   if (maestroRun.signal !== null) exit = `Maestro was stopped by ${maestroRun.signal}`;
   if (maestroRun.error !== undefined) exit = `Maestro could not run: ${maestroRun.error.message}`;
+  // Maestro's reason is in the job log before anything else is asked of the
+  // phone, even if what follows hangs and the step is killed.
+  const who = flow ?? 'the first run';
+  process.stdout.write(`\ne2e:android: ${who} failed: ${exit}. The screen is read next.\n`);
+  printScreen(who);
   printCrashes();
   return (
     `${exit}, and its report says: ${verdict.message} Both have to pass. ` +
@@ -436,7 +448,8 @@ function bestEffort(read) {
  * What the phone was showing when `flow` failed in Maestro (CALL-01, approach
  * 9): its wakefulness and the focused window's package, printed, or unread
  * when they cannot be read. Only the value and the package name are printed,
- * never a dump's text (PRIV-07).
+ * never a dump's text (PRIV-07). They are read after the screen dump (BUG-70),
+ * so a few seconds after the failure.
  */
 function printEvidence(flow) {
   const wakefulness = bestEffort(wakefulnessNow);
