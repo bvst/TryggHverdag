@@ -1,6 +1,6 @@
 # Planning hub — walk-home safety app (working title)
 
-**Last updated:** 2026-10-27 · **Phase:** ✅ Planning complete → ✅ **M0 closed** (2026-09-29, D-083) → ✅ **M1 closed** (2026-10-01, D-088) → ✅ **M2 closed** (2026-10-23, D-142): the core safety loop on the server, all nine tasks done (D-090, D-115), closed on window B of REL-10-AC19, the staging canary on time for 24 hours, with BUG-63 open → 🟡 **M3 started** (2026-10-20, D-134): tasks 1 and 2 of 12 are done: GRP-01 (#96, squashed as `bd83b21` on 2026-10-21) and the home screen (GRP-02, CALL-01, CALL-02; #101, squashed as `05bfb73` on 2026-10-25, its step 1 #100, `50214c0`); task 3, start a journey (JRN-01, JRN-02, LOST-01's phone half), is next in D-134's order and not started; BUG-64, the dependency audit red on `main` after #101 merged, is done (#104, squashed as `35a3290` on 2026-10-26; the owner's answer is D-143, 2026-10-25); BUG-65 to BUG-67 and D-144 are done (#105, squashed as `57e3a3e` on 2026-10-27), BUG-69 is mitigated by D-144 with its check before pnpm queued, and BUG-68's `ci.yml` part is done (#106, squashed as `67492e5` on 2026-10-27, after `urso-agent` approved it: the ten installs take `--ignore-scripts`), with its `ai-review.yml:180` part open, to batch with Dependabot #102 (a hand merge, D-075); BUG-70 is open (`android-e2e` failed once on #106's branch, cause not known; the fix, which makes the next failure print its screen, is written and reviewed on the session branch and goes in the pull request after #106); `deploy-staging` failed on `main` at `67492e5` on a cut-off git push to Clever Cloud (not re-run; no bug number); A-03, the Google Play account, is done (the owner, 2026-10-27); [../progress.md](../progress.md) has where the rest stands
+**Last updated:** 2026-10-27 · **Phase:** ✅ Planning complete → ✅ **M0 closed** (2026-09-29, D-083) → ✅ **M1 closed** (2026-10-01, D-088) → ✅ **M2 closed** (2026-10-23, D-142): the core safety loop on the server, all nine tasks done (D-090, D-115), closed on window B of REL-10-AC19, the staging canary on time for 24 hours, with BUG-63 open → 🟡 **M3 started** (2026-10-20, D-134): tasks 1 and 2 of 12 are done: GRP-01 (#96, squashed as `bd83b21` on 2026-10-21) and the home screen (GRP-02, CALL-01, CALL-02; #101, squashed as `05bfb73` on 2026-10-25, its step 1 #100, `50214c0`); task 3, start a journey (JRN-01, JRN-02, LOST-01's phone half), is next in D-134's order and not started; BUG-64, the dependency audit red on `main` after #101 merged, is done (#104, squashed as `35a3290` on 2026-10-26; the owner's answer is D-143, 2026-10-25); BUG-65 to BUG-67 and D-144 are done (#105, squashed as `57e3a3e` on 2026-10-27), BUG-69 is mitigated by D-144 with its check before pnpm queued, and BUG-68's `ci.yml` part is done (#106, squashed as `67492e5` on 2026-10-27, after `urso-agent` approved it: the ten installs take `--ignore-scripts`), with its `ai-review.yml:180` part open, to batch with Dependabot #102 (a hand merge, D-075); BUG-70 is open (an `android-e2e` failure whose cause is not known; its fix is in [#107](https://github.com/bvst/TryggHverdag/pull/107), waiting for review and merge); `deploy-staging` failed on `main` at `67492e5` on a cut-off git push to Clever Cloud (not re-run; no bug number); A-03, the Google Play account, is done (the owner, 2026-10-27); [../progress.md](../progress.md) has where the rest stands
 
 **Current section:** milestone M3, started 2026-10-20 (D-134). **Milestone M2
 is closed** (2026-10-23, D-142). It started 2026-10-01 with SM-01; all nine
@@ -87,15 +87,9 @@ also explains the old jest-expo drill failure in `progress/m2.md`), the fix in `
 `ai-review.yml:180`'s install goes in a separate batch with Dependabot #102, a hand merge under D-075 (that batch must get
 opened; #102 also edits `daily-status.yml`); `daily-status.yml:81` runs on a schedule and by hand (`workflow_dispatch`, with the
 Claude secrets), so it is not only `main`'s reviewed code, and it gets the flag the next time that file is touched.
-**BUG-70 is open:** `android-e2e` failed on #106's branch (`00542de`, run 40469535686) at `first-contact`'s
-first wait for the call button, with the phone awake and the app's package focused, and which screen the app showed is
-unknown. The fix is evidence, not a cause: a failed Maestro run prints its screen as translation keys and resource IDs
-(`scripts/lib/screen-dump.mjs`, `scripts/e2e-android.mjs`). It is written and reviewed on the session branch (red `182c8ad`,
-`dd2b182`, `51ced5d`, `00049da`; green `d88a877`, `749bfc9`, `c50d5c6`; 160 of 160 tests pass in the four files; the in-session
-reviews of `d88a877`, `code-reviewer`, `privacy-security-reviewer` and `test-auditor`, and `safety-reviewer`'s of `b44a986`, all
-PASS) and goes in the pull request after #106, not opened
-yet: `gate:full` has not completed on this head. Whether uiautomator can read the screen right after Maestro exits on CI's
-emulator is not verified; the cause stays open until a failure prints its screen. **`deploy-staging` failed on
+**BUG-70 is open:** `android-e2e` failed once on #106's branch, and which screen the app showed is not known. Its fix makes a failed
+run print the screen; it is in [#107](https://github.com/bvst/TryggHverdag/pull/107), waiting for review and merge, and the cause stays
+open until a failure prints its screen. Detail: `progress.md` and `progress/m3.md`. **`deploy-staging` failed on
 `main` at `67492e5`** (run 40493742912, the "Deploy" step): the coordinating session read the job's log, and the git push of the
 source to Clever Cloud was cut off about a second in ("unexpected disconnect while reading sideband packet"). One transport
 failure, outside this repository's code; not re-run, the next merge to `main` deploys again; no bug number, one to be given if it
@@ -229,7 +223,7 @@ too: #101, squashed as `05bfb73` on 2026-10-25 (D-141; step 1 was #100,
 (#104, `35a3290`, 2026-10-26; the owner's answer is D-143), and so are BUG-65 to
 BUG-67 with D-144 (#105, `57e3a3e`, 2026-10-27: six pnpm files need the owner's
 approval). BUG-69 is mitigated by D-144, BUG-68's `ci.yml` part is done (#106, `67492e5`, 2026-10-27) and its `ai-review.yml:180`
-part is open, BUG-70 (one `android-e2e` failure, cause not known) is open, `deploy-staging` failed on `main` at `67492e5` on a
+part is open, BUG-70 (one `android-e2e` failure; the fix is in #107) is open, `deploy-staging` failed on `main` at `67492e5` on a
 cut-off git push to Clever Cloud (not re-run), and A-03, the Google Play account, is done (the owner, 2026-10-27).
 Task 3, start a journey, is next in D-134's order:
 [../progress.md](../progress.md).
