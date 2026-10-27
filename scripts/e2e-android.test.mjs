@@ -606,9 +606,11 @@ function setUpWorld({ dir, stateDir, flowsDir, world }) {
  * window to read, as remembered from AOSP's source and not captured from CI:
  * "ERROR: null root node returned by UiTestAutomationBridge." on stderr,
  * nothing written, and exit 0; or 'screenRemove': `rm -f` of that path fails,
- * and the file stays.
+ * and the file stays; or, round 4 (safety-reviewer), 'screenCat': the dump
+ * works and says so, and `cat` of that path fails with a synthetic error and
+ * exit 1.
  *
- * @param {{ stateDir: string, refuse?: 'revoke' | 'largeFont' | 'wake' | 'powerRead' | 'screenDump' | 'screenNullRoot' | 'screenRemove' }} world
+ * @param {{ stateDir: string, refuse?: 'revoke' | 'largeFont' | 'wake' | 'powerRead' | 'screenDump' | 'screenNullRoot' | 'screenRemove' | 'screenCat' }} world
  */
 /** BUG-70: how the stand-in's `uiautomator` answers, as worldAnswers says. */
 function screenDumpAnswer(refuse, file) {
@@ -647,10 +649,17 @@ function worldAnswers({ stateDir, refuse }) {
     '      *uiautomator*)',
     ...screenDumpAnswer(refuse, file),
     `      "shell cat ${SCREEN_DUMP_PATH}")`,
-    `        if [ ! -f ${file('screen-file')} ]; then`,
-    `          echo "cat: ${SCREEN_DUMP_PATH}: No such file or directory" >&2; exit 1`,
-    '        fi',
-    `        /bin/cat ${file('screen-file')} ;;`,
+    ...(refuse === 'screenCat'
+      ? [
+          `        echo "cat: ${SCREEN_DUMP_PATH}: Input/output error (synthetic)" >&2`,
+          '        exit 1 ;;',
+        ]
+      : [
+          `        if [ ! -f ${file('screen-file')} ]; then`,
+          `          echo "cat: ${SCREEN_DUMP_PATH}: No such file or directory" >&2; exit 1`,
+          '        fi',
+          `        /bin/cat ${file('screen-file')} ;;`,
+        ]),
     `      "shell rm -f ${SCREEN_DUMP_PATH}")`,
     ...(refuse === 'screenRemove'
       ? [`        echo "rm: ${SCREEN_DUMP_PATH}: Read-only file system" >&2`, '        exit 1 ;;']
@@ -1341,6 +1350,9 @@ function expectWaitedOut(wait, { deadline, interval }, output) {
  *   uiautomator last wrote on the device, empty when nothing dumped the screen,
  *   and `screenFileAtEnd`, the file at that path on the device at the end, or
  *   null when there is none (round 2: the script removes it after reading it).
+ *   Round 4 (additive): `refuse` is what the stand-in emulator refuses in the
+ *   world a run given no `world` gets (worldAnswers), so a first run can meet
+ *   a refused dump too; unset, it refuses nothing, as before.
  */
 async function runPastPreflight({
   args = ['--skip-build'],
@@ -1367,6 +1379,7 @@ async function runPastPreflight({
   extraFlows = {},
   world,
   firstRunScreen,
+  refuse,
 } = {}) {
   const dir = mkdtempSync(path.join(tmpdir(), 'e2e-android-past-preflight-'));
   try {
@@ -1428,6 +1441,7 @@ async function runPastPreflight({
       (copyFlows === 'all'
         ? {
             effects: AS_IT_SHOULD_BE,
+            refuse,
             firstRun: {
               report,
               exit: maestroExit,
@@ -3729,6 +3743,62 @@ const FAILED_MAESTRO_RUNS = [
   },
 ];
 
+/** The first run, failing in Maestro on the join screen, with what the stand-in emulator `refuse`s. */
+const firstRunFails = (refuse) =>
+  runPastPreflight({
+    flows: [
+      ['app-starts', 'SUCCESS'],
+      ['wrong-code', 'ERROR'],
+    ],
+    maestroExit: 1,
+    firstRunScreen: JOIN_SCREEN,
+    refuse,
+  });
+
+/** The index in `lines` of the line that says the screen `who` failed on is unread. */
+const unreadLine = (lines, who) =>
+  lines.findIndex((line) => who.test(line) && /\bscreen\b/i.test(line) && UNREAD.test(line));
+
+/**
+ * Round 4 (safety-reviewer): runs whose Maestro run fails, the screen then
+ * read or its dump refused; who failed; where the screen's part of the job log
+ * starts; and the final message stop() writes, as it was before round 4. Kept
+ * out of the test.each call, as REPORT_PROBLEMS is.
+ */
+const REASON_BEFORE_SCREEN = [
+  {
+    what: 'a scripted flow, first-contact.yaml, fails and the screen is read',
+    run: () => runScripted({ effects: FIRST_CONTACT_FAILS_ON(WAITING_SCREEN) }),
+    who: /\bfirst-contact\b/,
+    screenPart: screenHeading,
+    final:
+      'e2e:android: first-contact.yaml: the flow failed in Maestro: Maestro exited with code 1, and its report says: ',
+  },
+  {
+    what: 'a scripted flow, first-contact.yaml, fails and the dump is refused',
+    run: () =>
+      runScripted({ effects: FIRST_CONTACT_FAILS_ON(WAITING_SCREEN), refuse: 'screenDump' }),
+    who: /\bfirst-contact\b/,
+    screenPart: unreadLine,
+    final:
+      'e2e:android: first-contact.yaml: the flow failed in Maestro: Maestro exited with code 1, and its report says: ',
+  },
+  {
+    what: 'the first run fails and the screen is read',
+    run: () => firstRunFails(undefined),
+    who: /\bfirst run\b/i,
+    screenPart: screenHeading,
+    final: 'e2e:android: Maestro exited with code 1, and its report says: ',
+  },
+  {
+    what: 'the first run fails and the dump is refused',
+    run: () => firstRunFails('screenDump'),
+    who: /\bfirst run\b/i,
+    screenPart: unreadLine,
+    final: 'e2e:android: Maestro exited with code 1, and its report says: ',
+  },
+];
+
 describe('BUG-70: when a Maestro run fails, the job log names the screen it failed on, by translation keys and ids only', () => {
   test('BUG-70: the screens here are the app’s: the call button’s and 112’s IDs are read from its source, and the call button’s is the one first-contact.yaml waits for', () => {
     const flow = readFileSync(path.join(REPO, APP, 'e2e', 'first-contact.yaml'), 'utf8');
@@ -3928,6 +3998,60 @@ describe('BUG-70: when a Maestro run fails, the job log names the screen it fail
     expect([refused.code, removed.code], refused.output).toEqual([1, 1]);
     expect(Number(refused.fontScaleAtEnd), refused.output).toBe(1);
   });
+
+  // Round 4 (safety-reviewer S1): a cat that fails, after a dump that said it
+  // wrote the file, is one unread line naming the cat and its exit code; the
+  // file is still removed.
+  test('BUG-70: when cat of the dump fails, one line says the screen is unread, naming the cat and its exit code, never what adb printed; no screen line is printed; the rm -f still runs right after the cat; and the run fails with Maestro’s reason, as when the screen is read', async () => {
+    const { code, stderr, output, calls, screenDumped, screenFileAtEnd } = await runScripted({
+      effects: FIRST_CONTACT_FAILS_ON(WAITING_SCREEN),
+      refuse: 'screenCat',
+    });
+    const adb = calls.filter((call) => call.startsWith('adb'));
+    const cat = adb.findIndex(catsScreenFile);
+    const unread = screenUnread(output);
+
+    // Not vacuous: the dump wrote the file and said so, and cat was tried.
+    expect(screenDumped, output).toBe(WAITING_SCREEN.replaceAll('{APP}', APP_ID));
+    expect(cat, output).toBeGreaterThan(-1);
+    expect(unread, output).toHaveLength(1);
+    expect(unread[0], output).toMatch(/\bcat\b/);
+    expect(unread[0], output).toMatch(/\bexit code 1\b/);
+    expect(output).not.toContain('Input/output error');
+    expect(output).not.toContain(`${APP_ID}: id `);
+    expect(screenHeading(output.split('\n'), /\bfirst-contact\b/), output).toBe(-1);
+    expect(adb[cat + 1], output).toBe(`adb -s emulator-5554 shell rm -f ${SCREEN_DUMP_PATH}`);
+    expect(screenFileAtEnd, output).toBeNull();
+    expect(code, output).toBe(1);
+    expect(stderr, output).toContain('first-contact');
+    expect(stderr, output).toMatch(/\bMaestro exited with code 1\b/);
+  });
+
+  // Round 4 (safety-reviewer S2): the screen's three adb calls can take
+  // minutes before stop() prints Maestro's reason, and CI's step can be killed
+  // first. So Maestro's reason is in the job log before the screen is read: a
+  // line on stdout naming who failed and Maestro's exit, in the words the
+  // final message uses, saying the screen is read next. The shorter limit the
+  // three calls get is not tested here: a real wait would slow the suite.
+  test.each(REASON_BEFORE_SCREEN)(
+    'BUG-70: when $what, a stdout line naming who failed, saying Maestro exited with code 1 and that the screen is read next, comes before the screen’s part of the job log; the final message is as it was',
+    async ({ run, who, screenPart, final }) => {
+      const { code, stdout, stderr, output } = await run();
+      const lines = stdout.split('\n');
+      const reason = lines.findIndex(
+        (line) =>
+          who.test(line) && /\bMaestro exited with code 1\b/.test(line) && /\bscreen\b/i.test(line),
+      );
+      const screen = screenPart(lines, who);
+
+      // Not vacuous: the screen's part is there, on stdout.
+      expect(screen, output).toBeGreaterThan(-1);
+      expect(reason, output).toBeGreaterThan(-1);
+      expect(reason, output).toBeLessThan(screen);
+      expect(stderr, output).toContain(final);
+      expect(code, output).toBe(1);
+    },
+  );
 });
 
 // CALL-01, approach 9 (review loop 1, code-reviewer 2): e2e-android.mjs
