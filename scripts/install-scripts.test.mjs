@@ -15,11 +15,14 @@
  * five packages in pnpm-workspace.yaml, so adding a script needs the owner's
  * review. This is CI's own defence, and privacy-security-reviewer's S1 on
  * #105 asked for it on every install before a required check, not on the
- * `security` job's alone. #106 put it on ci.yml's installs. BUG-68's second
- * part holds every workflow to it: ai-review.yml's `review` job and
- * daily-status.yml's `report` job each install just before the step that is
- * given the Claude secrets, and a workflow added later is held without a
- * change here.
+ * `security` job's alone. #106 put it on ci.yml's installs, and BUG-68's
+ * second part on every workflow's, one added later included: ai-review.yml's
+ * `review` job and daily-status.yml's `report` job install just before the
+ * step given the Claude secrets. The flag stops install scripts only. A run
+ * on a branch still gives that branch's code the secrets in other ways: its
+ * root .pnpmfile.cjs (below), and in a manual run its Claude config and the
+ * scripts the job runs. That is accepted: anyone with write access can reach
+ * the secrets with a new workflow file anyway.
  *
  * Test names carry no <ID>-ACn: prefix: a bug's tests are named BUG-<n>, and
  * BUG- is not a requirement prefix req:coverage collects.
@@ -98,20 +101,16 @@
  *   - pnpm/action-setup in a composite action or a reusable workflow that
  *     wraps it, and an `INPUT_RUN_INSTALL` environment variable (whether the
  *     runner lets one override the input was not tried);
- *   - a root .pnpmfile.cjs. pnpm loads it for an install with
- *     `--ignore-scripts` too: its hooks (`readPackage`, `updateConfig`,
- *     `afterAllResolved`) are not lifecycle scripts. In a minimal pnpm
- *     10.33.0 workspace on 2026-10-27, a .pnpmfile.cjs that appended to a
- *     marker file was loaded twice, its `updateConfig` ran twice and its
- *     `readPackage` once for each project, during `pnpm install
- *     --frozen-lockfile --ignore-scripts` from a checkout with no
- *     node_modules, while no
- *     `postinstall` ran (`afterAllResolved` did not run there: the frozen
- *     install skipped resolution). It is held elsewhere: CODEOWNERS owns
- *     `/.pnpmfile.cjs` before it exists (D-144), scripts/gate.test.mjs keeps
- *     it absent (`ABSENT_PNPMFILE`), and BUG-11's test in
- *     scripts/dependency-audit.test.mjs refuses a root file with "pnpmfile"
- *     in its name;
+ *   - a root .pnpmfile.cjs. Its hooks are not lifecycle scripts, so pnpm
+ *     10.33.0 loads it under `--ignore-scripts`, and before any install: on
+ *     any `pnpm --version`, and at setup-node's `cache: pnpm` step, which runs
+ *     `pnpm store path --silent`. In a minimal workspace on 2026-10-27 its
+ *     `updateConfig` ran on each of the three, while no `postinstall` ran.
+ *     CODEOWNERS owns `/.pnpmfile.cjs` (D-144), and `ABSENT_PNPMFILE` in
+ *     scripts/gate.test.mjs and BUG-11's test in
+ *     scripts/dependency-audit.test.mjs refuse one, but they run in ci.yml
+ *     only: a pull request that adds one has it loaded in its own ai-review
+ *     job. BUG-69's queued check before pnpm is to cover that;
  *   - `npm_config_ignore_scripts` or an .npmrc `ignore-scripts` line: neither
  *     is read. pnpm gives the command-line option precedence: in the minimal
  *     workspace on 2026-10-27, with either set to `false`,
