@@ -4,7 +4,8 @@
  * `adb shell dumpsys telecom`, the focused window in `adb shell dumpsys window`,
  * and the dialer role's holders in `adb shell cmd role get-role-holders
  * android.app.role.DIALER`; and, for CALL-01's approach 9 after PR #101's
- * first android-e2e, the phone's wakefulness in `adb shell dumpsys power`.
+ * first android-e2e, the phone's wakefulness in `adb shell dumpsys power`; and,
+ * for BUG-70, the screen in `adb shell uiautomator dump` (hierarchyDump).
  *
  * Shared by the tests of scripts/lib/call-records.mjs, which read these
  * dumps, and by the stand-in emulator of scripts/e2e-android.test.mjs, which
@@ -175,4 +176,169 @@ export function powerDump(wakefulness: string | null): string {
     'Wake Locks: size=0',
     '',
   ].join('\n');
+}
+
+/*
+ * BUG-70: the screen as `adb shell uiautomator dump <file>` writes it, so the
+ * L7 script can name the screen a flow failed on (scripts/lib/screen-dump.mjs)
+ * without printing what is on it (PRIV-07).
+ *
+ * The shape is AOSP's AccessibilityNodeInfoDumper's, cut down: one line, the
+ * XML declaration, a <hierarchy rotation="…"> root, and a <node> per view, in
+ * the tree's order, each with the attributes that dumper writes, in its order;
+ * a node with no children closed as ` />`, as Android's XML serializer (kxml)
+ * closes an empty element. Every node has the same bounds here, which nothing
+ * reads. Not captured from CI's image: no session has read that image's dump.
+ *
+ * How a React Native view shows in it, from react-native 0.86.3's Android code
+ * in apps/mobile/node_modules: a testID is the node's resource-id, as it is
+ * (no package in front); an accessibilityLabel is its content-desc, alone (the
+ * hint goes to the node's tooltip, not into content-desc); a Pressable with
+ * the role "button" is an android.widget.Button. That an app's window holds
+ * Android's content frame, `android:id/content`, is from Android apps' dumps
+ * in general, not from this app's. Every text and number put in them is the
+ * caller's, and synthetic (RG-07).
+ */
+
+/** A view in a uiautomator dump. Unset text, resource-id and content-desc are written empty, as the dumper writes them. */
+export interface UiNode {
+  /** The resource-id: React Native's testID, or a system app's `package:id/name`. */
+  resourceId?: string;
+  text?: string;
+  /** The content-desc: React Native's accessibilityLabel. */
+  contentDesc?: string;
+  /** The class; android.view.ViewGroup when unset. */
+  className?: string;
+  /** The package; its parent's when unset, and the dump's for a root. */
+  package?: string;
+  clickable?: boolean;
+  children?: readonly UiNode[];
+}
+
+/** What every node's bounds are said to be. */
+const NODE_BOUNDS = '[0,0][1080,2400]';
+
+/** The characters Android's XML serializer (kxml) writes as an entity in an attribute's value. */
+const ATTRIBUTE_ENTITIES: Readonly<Record<string, string>> = {
+  '&': '&amp;',
+  '<': '&lt;',
+  '>': '&gt;',
+  '"': '&quot;',
+  '\n': '&#10;',
+  '\r': '&#13;',
+  '\t': '&#9;',
+};
+
+/** `value` as an attribute's value in the dump: &, <, > and " by name, a line break or a tab by its number. */
+export function xmlAttribute(value: string): string {
+  return value.replace(/[&<>"\n\r\t]/g, (character) => ATTRIBUTE_ENTITIES[character] ?? character);
+}
+
+function nodeXml(node: UiNode, index: number, inherited: string): string {
+  const pack = node.package ?? inherited;
+  const clickable = String(node.clickable ?? false);
+  const attributes: [string, string][] = [
+    ['index', String(index)],
+    ['text', node.text ?? ''],
+    ['resource-id', node.resourceId ?? ''],
+    ['class', node.className ?? 'android.view.ViewGroup'],
+    ['package', pack],
+    ['content-desc', node.contentDesc ?? ''],
+    ['checkable', 'false'],
+    ['checked', 'false'],
+    ['clickable', clickable],
+    ['enabled', 'true'],
+    ['focusable', clickable],
+    ['focused', 'false'],
+    ['scrollable', 'false'],
+    ['long-clickable', 'false'],
+    ['password', 'false'],
+    ['selected', 'false'],
+    ['bounds', NODE_BOUNDS],
+  ];
+  const open = `<node ${attributes.map(([name, value]) => `${name}="${xmlAttribute(value)}"`).join(' ')}`;
+  const children = node.children ?? [];
+  if (children.length === 0) return `${open} />`;
+  return `${open}>${children.map((child, at) => nodeXml(child, at, pack)).join('')}</node>`;
+}
+
+/**
+ * The file `uiautomator dump` writes: these root views, each with its
+ * children, every node without a package of its own in `pack`.
+ */
+export function hierarchyDump(
+  pack: string,
+  roots: readonly UiNode[],
+  { rotation = 0 }: { rotation?: number } = {},
+): string {
+  return [
+    "<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>",
+    `<hierarchy rotation="${String(rotation)}">`,
+    ...roots.map((root, at) => nodeXml(root, at, pack)),
+    '</hierarchy>',
+  ].join('');
+}
+
+/** A view with no resource-id, text or label: a layout, holding `children`. */
+export function layoutNode(
+  children: readonly UiNode[] = [],
+  className = 'android.view.ViewGroup',
+): UiNode {
+  return { className, children };
+}
+
+/** React Native's <Text>: a TextView with its text, and its accessibilityLabel as content-desc when it has one. */
+export function textNode(text: string, contentDesc = ''): UiNode {
+  return { className: 'android.widget.TextView', text, contentDesc };
+}
+
+/** A Pressable with the role "button": its testID, its accessibilityLabel, and the texts drawn in it. */
+export function buttonNode({
+  id = '',
+  label,
+  texts = [],
+}: {
+  id?: string;
+  label: string;
+  texts?: readonly string[];
+}): UiNode {
+  return {
+    className: 'android.widget.Button',
+    resourceId: id,
+    contentDesc: label,
+    clickable: true,
+    children: texts.map((text) => textNode(text)),
+  };
+}
+
+/** React Native's ActivityIndicator with an accessibilityLabel: a ProgressBar. */
+export function progressNode(label: string): UiNode {
+  return { className: 'android.widget.ProgressBar', contentDesc: label };
+}
+
+/** React Native's TextInput: an EditText with its accessibilityLabel and the text typed in it. */
+export function editTextNode(label: string, text = ''): UiNode {
+  return { className: 'android.widget.EditText', contentDesc: label, text, clickable: true };
+}
+
+/**
+ * An app's window: the decor view's frames, Android's content frame
+ * (`android:id/content`) and React Native's root view, with `children` in it.
+ */
+export function appWindowNode(children: readonly UiNode[]): UiNode {
+  return layoutNode(
+    [
+      layoutNode(
+        [
+          {
+            className: 'android.widget.FrameLayout',
+            resourceId: 'android:id/content',
+            children: [layoutNode(children)],
+          },
+        ],
+        'android.widget.LinearLayout',
+      ),
+    ],
+    'android.widget.FrameLayout',
+  );
 }
